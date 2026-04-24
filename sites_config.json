@@ -1,0 +1,18 @@
+{
+    "ngobox": {
+        "url": "https://ngobox.org/rfp_eoi_listing.php",
+        "search_input_selector": "input#searchme",
+        "search_button_selector": "input.sbtn",
+        "results_link_selector": "a[href*='full_rfp_eoi_']",
+        "tender_title_selector": "h1, h2, h3",
+        "tender_description_selector": ".blog_detail, .detail_content, p"
+    },
+    "devnet": {
+        "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
+        "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
+        "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
+        "results_link_selector": "#ContentPlaceHolder1_SearchView1_grdJobs a",
+        "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
+        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdtxtDesc"
+    }
+}

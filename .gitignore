@@ -1,0 +1,38 @@
+# ── Environment & Secrets ──────────────────────────────────────────────────
+.env
+*.env
+
+# ── Python Cache ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Scraped Data & Downloads ───────────────────────────────────────────────
+data/downloads/
+data/outputs/
+
+# ── Debug / Temp Scripts ───────────────────────────────────────────────────
+debug_scraper.py
+inspect_devnet.py
+test_search.html
+
+# ── Virtual Environments ───────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Playwright Browser Binaries ────────────────────────────────────────────
+ms-playwright/
+
+# ── OS / Editor Junk ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
+
+# ── Excel Lock Files ──────────────────────────────────────────────────────
+~$*.xlsx

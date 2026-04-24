@@ -1,0 +1,6 @@
+playwright
+groq
+openpyxl
+python-dotenv
+pdfplumber
+python-docx
