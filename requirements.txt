@@ -4,3 +4,8 @@ openpyxl
 python-dotenv
 pdfplumber
 python-docx
+fastapi
+uvicorn
+websockets
+jinja2
+python-multipart

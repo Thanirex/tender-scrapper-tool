@@ -17,14 +17,20 @@ class ScraperAgent:
         page.wait_for_load_state("networkidle")
         return page.locator(site['results_link_selector']).count()
 
-    def search(self, site_key, keyword):
+    def search(self, site_key, keyword, log_callback=None):
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
         site = self.config.get(site_key)
         if not site:
-            print(f"❌ Error: {site_key} not found in config.")
+            log(f"❌ Error: {site_key} not found in config.")
             return []
 
         results = []
-        print(f"🔍 [Scraper] Searching {site_key} for '{keyword}'...")
+        log(f"🔍 [Scraper] Searching {site_key} for '{keyword}'...")
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -34,7 +40,7 @@ class ScraperAgent:
             try:
                 # First search to get total count
                 total = self._do_search(page, site, keyword)
-                print(f"   ↳ Found {total} results.")
+                log(f"   ↳ Found {total} results.")
 
                 for i in range(total):
                     try:
@@ -76,7 +82,7 @@ class ScraperAgent:
                             f.write(f"Keyword: {keyword}\n")
                             f.write(f"Site: {site_key}\n\n")
                             f.write(content)
-                        print(f"   💾 Saved: {txt_filename}")
+                        log(f"   💾 Saved: {txt_filename}")
 
                         results.append({
                             "title": title,
@@ -85,11 +91,11 @@ class ScraperAgent:
                         })
 
                     except Exception as row_err:
-                        print(f"   ⚠️ Error on row {i}: {row_err}")
+                        log(f"   ⚠️ Error on row {i}: {row_err}")
                         continue
 
             except Exception as e:
-                print(f"❌ Scraping error on {site_key}: {e}")
+                log(f"❌ Scraping error on {site_key}: {e}")
             finally:
                 browser.close()
 

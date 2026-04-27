@@ -14,5 +14,10 @@
         "results_link_selector": "#ContentPlaceHolder1_SearchView1_grdJobs a",
         "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
         "tender_description_selector": "#ContentPlaceHolder1_JD1_tdtxtDesc"
+    },
+    "ungm": {
+        "url": "https://www.ungm.org",
+        "requires_auth": true,
+        "display_name": "UNGM (UN Global Marketplace)"
     }
 }

@@ -11,15 +11,20 @@ class SummarizerAgent:
         else:
             self.client = Groq(api_key=api_key)
 
-    def summarize(self, text):
+    def summarize(self, text, log_callback=None, max_chars=4000):
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
         if not text or len(text.strip()) < 20:
             return "No meaningful content found to summarize."
-            
+
         if not self.client:
             return "(Groq Key Not Setup) - Placeholder Summary: This tender focuses on capacity building and e-learning resources."
-            
-        # We truncate the text to 4000 characters so we don't blow up the context window
-        text_snippet = text[:4000]
+
+        text_snippet = text[:max_chars]
         
         prompt = f"""You are a professional tender and RFP analyst.
 Please read the following scraped text from a tender website.
@@ -36,7 +41,7 @@ TENDER DESCRIPTION:
 
 SUMMARY:"""
 
-        print(f"🤖 [Summarizer] Calling Groq LLM...")
+        log(f"🤖 [Summarizer] Calling Groq LLM...")
         try:
             chat_completion = self.client.chat.completions.create(
                 messages=[
@@ -48,5 +53,5 @@ SUMMARY:"""
             )
             return chat_completion.choices[0].message.content.strip()
         except Exception as e:
-            print(f"❌ Groq Error: {e}")
+            log(f"❌ Groq Error: {e}")
             return "Error generating summary."

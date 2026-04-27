@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tender Scrapper - Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="background-blobs">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+    
+    <div class="container">
+        <header>
+            <h1>Tender Scrapper</h1>
+            <p>Agentic Data Extraction & LLM Summarization</p>
+        </header>
+
+        <div class="main-content">
+            <aside class="controls glass-panel">
+                <div class="input-group">
+                    <label for="site-select">Target Website</label>
+                    <select id="site-select">
+                        <option value="" disabled selected>Loading...</option>
+                    </select>
+                </div>
+
+                <div id="ungm-credentials" class="ungm-cred-panel hidden">
+                    <div class="cred-header">
+                        <span class="lock-icon">🔒</span>
+                        <span>UNGM Login</span>
+                    </div>
+                    <p class="cred-note">Credentials are used only for this session and never stored.</p>
+                    <div class="input-group" style="margin-bottom:0.75rem;">
+                        <label for="ungm-email">Email</label>
+                        <input type="email" id="ungm-email" placeholder="your@email.com" autocomplete="email">
+                    </div>
+                    <div class="input-group" style="margin-bottom:0.75rem;">
+                        <label for="ungm-password">Password</label>
+                        <input type="password" id="ungm-password" placeholder="••••••••" autocomplete="current-password">
+                    </div>
+                    <label class="toggle-row">
+                        <input type="checkbox" id="ungm-show-browser">
+                        <span class="toggle-label">Show live browser on screen</span>
+                    </label>
+                </div>
+
+                <div class="input-group">
+                    <label>Select Category</label>
+                    <select id="category-select">
+                        <option value="" disabled selected>Loading categories...</option>
+                    </select>
+                </div>
+
+                <div class="input-group">
+                    <label>Keywords (Comma separated)</label>
+                    <textarea id="keywords-input" placeholder="e.g. Digital Education, eLearning..." rows="4"></textarea>
+                </div>
+
+                <button id="start-btn" class="primary-btn">
+                    <span class="btn-text">Start Scraping</span>
+                    <div class="loader hidden"></div>
+                </button>
+            </aside>
+
+            <section class="live-feed glass-panel">
+                <div class="feed-header">
+                    <h2>Live Terminal</h2>
+                    <span id="status-badge" class="badge idle">Idle</span>
+                </div>
+                <div class="terminal" id="terminal">
+                    <div class="log-line system">Ready to launch...</div>
+                </div>
+                <div id="download-area" class="download-area hidden">
+                    <a id="download-btn" href="#" class="success-btn" download>📥 Download Excel Report</a>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
