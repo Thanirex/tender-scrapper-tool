@@ -16,26 +16,29 @@ from dotenv import load_dotenv
 
 from agents.scraper_agent import ScraperAgent
 from agents.summarizer_agent import SummarizerAgent
+from paths import APP_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, init as _init_paths
 
-load_dotenv()
+# Load .env from the app directory so double-click launch works regardless of cwd
+load_dotenv(APP_DIR / ".env")
+
+_init_paths()
 
 app = FastAPI()
 
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
 
 
 @app.get("/")
 async def read_index():
-    return FileResponse("static/index.html")
+    return FileResponse(str(APP_DIR / "static" / "index.html"))
 
 
 @app.get("/config")
 async def get_config():
-    with open("sites_config.json", "r") as f:
+    with open(APP_DIR / "sites_config.json", "r") as f:
         sites = json.load(f)
     try:
-        with open("Keywords.json", "r") as f:
+        with open(APP_DIR / "Keywords.json", "r") as f:
             keywords = json.load(f)
     except FileNotFoundError:
         keywords = {}
@@ -85,12 +88,11 @@ def _format_excel(excel_path):
 
 
 def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
-    agent = ScraperAgent("sites_config.json")
+    agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
     summarizer = SummarizerAgent()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = f"data/outputs/Scrape_Results_{timestamp}.xlsx"
-    os.makedirs("data/outputs", exist_ok=True)
+    output_path = str(OUTPUTS_DIR / f"Scrape_Results_{timestamp}.xlsx")
 
     columns = ["S.no", "Website", "Keyword", "Document Name", "Summary"]
     records = []
@@ -114,6 +116,7 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
     ws.append(columns)
     for row in records:
         ws.append(row)
+    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
     wb.save(output_path)
     _format_excel(output_path)
 
@@ -137,8 +140,8 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
         return None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = f"data/downloads/ungm/{timestamp}"
-    output_path = f"data/outputs/UNGM_Report_{timestamp}.docx"
+    run_dir = str(DOWNLOADS_DIR / "ungm" / timestamp)
+    output_path = str(OUTPUTS_DIR / f"UNGM_Report_{timestamp}.docx")
 
     log_cb("🚀 Starting UNGM Agentic Scraper...")
     if show_browser:

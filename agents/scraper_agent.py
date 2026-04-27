@@ -1,7 +1,13 @@
 import json
 import re
 import os
+import sys
+from pathlib import Path
 from playwright.sync_api import sync_playwright
+
+# Resolve paths module from app root regardless of cwd
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from paths import DOWNLOADS_DIR
 
 class ScraperAgent:
     def __init__(self, config_path="sites_config.json"):
@@ -75,8 +81,9 @@ class ScraperAgent:
                         # Save to a unique .txt file
                         safe_title = re.sub(r'[\\/*?:"<>|]', '', title)[:50]
                         safe_keyword = re.sub(r'[\\/*?:"<>|]', '', keyword)[:20]
-                        txt_filename = os.path.join("data", "downloads", f"{site_key}_{safe_keyword}_{i+1}_{safe_title}.txt")
-                        os.makedirs(os.path.dirname(txt_filename), exist_ok=True)
+                        site_dl_dir = DOWNLOADS_DIR / site_key
+                        site_dl_dir.mkdir(parents=True, exist_ok=True)
+                        txt_filename = str(site_dl_dir / f"{safe_keyword}_{i+1}_{safe_title}.txt")
                         with open(txt_filename, "w", encoding="utf-8") as f:
                             f.write(f"Source: {current_url}\n")
                             f.write(f"Keyword: {keyword}\n")

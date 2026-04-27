@@ -120,6 +120,18 @@ GROQ_API_KEY=gsk_your_key_here
 
 ### 5. Run
 
+**Option A — double-click (recommended for most users):**
+
+Double-click `launch.bat`. It starts the server and opens your browser automatically.
+
+**Option B — terminal:**
+
+```bash
+python launch.py
+```
+
+**Option C — developer mode (auto-reload on code changes):**
+
 ```bash
 uvicorn api:app --reload
 ```
@@ -140,12 +152,14 @@ Open `http://localhost:8000`.
 
 ## Output files
 
+All output is saved to `Documents\Tender Scrapping Documents\` in your Windows user profile — regardless of where the app is installed.
+
 | Path | Contents |
 |------|----------|
-| `data/outputs/UNGM_Report_<timestamp>.docx` | Word report — one section per tender, 5 fields with colour-coded confidence badges |
-| `data/outputs/Scrape_Results_<timestamp>.xlsx` | Excel report — ngobox / devnet results |
-| `data/downloads/ungm/<timestamp>/<keyword>/<title>/` | Raw attachments downloaded per tender |
-| `data/downloads/<site>_<keyword>_<n>_<title>.txt` | Raw page text for ngobox / devnet |
+| `~/Documents/Tender Scrapping Documents/outputs/UNGM_Report_<timestamp>.docx` | Word report — one section per tender, 5 fields with colour-coded confidence badges |
+| `~/Documents/Tender Scrapping Documents/outputs/Scrape_Results_<timestamp>.xlsx` | Excel report — ngobox / devnet results |
+| `~/Documents/Tender Scrapping Documents/downloads/ungm/<timestamp>/<keyword>/<title>/` | Raw attachments downloaded per tender |
+| `~/Documents/Tender Scrapping Documents/downloads/<site>/<keyword>_<n>_<title>.txt` | Raw page text for ngobox / devnet |
 
 ---
 

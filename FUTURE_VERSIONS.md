@@ -5,6 +5,58 @@ larger LLM context windows, paid API tiers, or local models are available.
 
 ---
 
+## Deployment options
+
+### Current: local launcher (`launch.bat` / `launch.py`)
+- Double-click `launch.bat` → starts FastAPI server on `localhost:8000` → opens browser
+- Anyone on the same WiFi / LAN can access it at `http://<your-machine-IP>:8000`
+- Data saves to `~/Documents/Tender Scrapping Documents/` on the machine running the server
+- **Best for**: 1–5 person internal team, one person runs the server, others browse to it
+
+### Option A: Proper Windows installer (future)
+Current state: users need Python installed and must run `pip install -r requirements.txt` + `playwright install chromium` manually.
+
+To make a true one-click installer:
+1. Use **Inno Setup** or **NSIS** to create a `.exe` installer that:
+   - Installs a bundled Python environment (using an embedded Python zip)
+   - Runs `pip install` and `playwright install chromium` silently during setup
+   - Creates a Desktop shortcut pointing to `launch.bat`
+2. **Why not PyInstaller directly**: Playwright bundles its own Chromium (~150 MB binary). PyInstaller can bundle it but the resulting `.exe` is 200–300 MB and fragile. An installer that ships dependencies separately is more reliable and easier to update.
+
+### Option B: Cloud hosting (future)
+Vercel and Netlify are serverless — Playwright cannot run there (no persistent process, no Chromium, 60s timeout).
+
+**What works:**
+- **Railway** (`railway.app`): push a `Dockerfile`, get a persistent server. Supports Playwright, WebSockets, env var secrets dashboard. ~$5/month.
+- **Render** (`render.com`): same story, slightly simpler UI.
+- **VPS** (DigitalOcean Droplet, Hetzner CX21): full control, SSH in, install deps, run with systemd or screen. Cheapest long-term (~$6/month).
+
+**Required `Dockerfile` additions for cloud:**
+```dockerfile
+FROM python:3.11-slim
+RUN apt-get update && apt-get install -y chromium chromium-driver
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+RUN playwright install chromium --with-deps
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+**Data storage on cloud**: the local filesystem is ephemeral on most PaaS — files disappear on redeploy.
+Options:
+- Mount a persistent disk (Render/Railway both support this)
+- Save outputs to S3 / Google Drive and return a signed download URL instead of a local file path
+- For UNGM use, storing raw downloaded PDFs remotely adds significant complexity — the local/LAN approach is simpler
+
+### Option C: Local network (current best for team use)
+Run on one dedicated machine (even an old laptop):
+1. Start `launch.bat`
+2. Find your local IP: `ipconfig` → IPv4 Address (e.g. `192.168.1.42`)
+3. Share `http://192.168.1.42:8000` with team members on the same network
+4. All output saves to the machine running the server under `~/Documents/Tender Scrapping Documents/`
+
+---
+
 ## Current hard limits (free Groq tier)
 
 | Constraint | Current value | Why |
