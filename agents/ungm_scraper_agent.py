@@ -27,7 +27,7 @@ class UNGMScraperAgent:
         all_results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=100 if not headless else 0)
+            browser = p.chromium.launch(headless=headless, slow_mo=30 if not headless else 0)
             ctx = browser.new_context(accept_downloads=True)
             page = ctx.new_page()
             try:
@@ -48,11 +48,17 @@ class UNGMScraperAgent:
 
         return all_results
 
-    def _goto(self, page, url: str, log) -> bool:
-        """Navigate and wait for the page to visually settle."""
+    def _goto(self, page, url: str, log, wait_for: str = None) -> bool:
+        """
+        Navigate and wait until a specific element appears (or 3s max).
+        wait_for: CSS selector to wait for — avoids fixed sleeps.
+        """
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(4000)
+            if wait_for:
+                page.locator(wait_for).wait_for(state="visible", timeout=8000)
+            else:
+                page.wait_for_timeout(2000)
             return True
         except Exception as e:
             log(f"❌ Navigation failed ({url}): {e}")
@@ -60,7 +66,7 @@ class UNGMScraperAgent:
 
     def _login(self, page, email: str, password: str, log) -> bool:
         log("🔐 Opening UNGM login page...")
-        if not self._goto(page, self.LOGIN_URL, log):
+        if not self._goto(page, self.LOGIN_URL, log, wait_for="input#UserName"):
             return False
 
         try:
@@ -82,7 +88,7 @@ class UNGMScraperAgent:
         return True
 
     def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log) -> list:
-        if not self._goto(page, self.NOTICES_URL, log):
+        if not self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle"):
             return []
 
         # Order matters: check Active FIRST and let its AJAX settle,
@@ -90,11 +96,11 @@ class UNGMScraperAgent:
         # Checking Active fires its own AJAX — if done after typing it overwrites the keyword.
         try:
             cb = page.locator("input#chkIsActive")
-            cb.wait_for(state="visible", timeout=10000)
+            cb.wait_for(state="visible", timeout=5000)
             if not cb.is_checked():
                 cb.check()
             log("   ✓ Active-only filter enabled")
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(1500)   # 1.5s is enough for Active AJAX to register
         except Exception as e:
             log(f"   ℹ️ Active-only checkbox not found: {e}")
 
@@ -112,7 +118,11 @@ class UNGMScraperAgent:
 
         try:
             page.locator("button#lnkSearch").click()
-            page.wait_for_timeout(10000)  # UNGM AJAX needs ~8s to return filtered results
+            # Wait for either results table or empty-notice div to become visible
+            try:
+                page.locator("#tblNotices, #noticesEmpty").first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                page.wait_for_timeout(8000)
             log(f"   🔍 Search submitted for '{keyword}'")
         except Exception as e:
             log(f"   ❌ Search submission failed: {e}")
@@ -169,7 +179,7 @@ class UNGMScraperAgent:
         return results
 
     def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log) -> dict | None:
-        if not self._goto(page, url, log):
+        if not self._goto(page, url, log, wait_for="h1"):
             return None
 
         try:
@@ -178,6 +188,22 @@ class UNGMScraperAgent:
                 title = page.locator("h1").first.text_content().strip()
             except Exception:
                 title = url.rstrip("/").split("/")[-1]
+
+            # Scrape verified structured fields directly from the page labels
+            # These are ground truth — no LLM inference needed for them
+            verified = {}
+            try:
+                for lbl_el in page.locator("span.label").all():
+                    try:
+                        label = lbl_el.text_content().strip().rstrip(":")
+                        parent_text = lbl_el.locator("..").text_content().strip()
+                        value = parent_text.replace(lbl_el.text_content().strip(), "").strip()
+                        if label and value:
+                            verified[label] = value
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
             # Full visible page text
             try:
@@ -255,6 +281,7 @@ class UNGMScraperAgent:
                 "url": url,
                 "page_text": body_text,
                 "files": downloaded,
+                "verified": verified,   # directly scraped structured fields
             }
 
         except Exception as e:

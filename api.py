@@ -155,16 +155,29 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     records = []
 
     for res in raw_results:
-        # Combine page text + all downloaded file text
-        text_parts = [res.get("page_text", "")]
+        text_parts = []
+
+        # Verified fields scraped directly from UNGM structured HTML — ground truth
+        verified = res.get("verified", {})
+        if verified:
+            lines = ["=== VERIFIED FIELDS (scraped directly from UNGM — treat as ground truth) ==="]
+            for k, v in verified.items():
+                lines.append(f"{k}: {v}")
+            text_parts.append("\n".join(lines))
+
+        page_text = res.get("page_text", "").strip()
+        if page_text:
+            text_parts.append(f"=== UNGM NOTICE PAGE TEXT ===\n{page_text}")
+
         for fpath in res.get("files", []):
             file_text = read_file(fpath)
-            if file_text:
-                text_parts.append(f"\n\n=== {os.path.basename(fpath)} ===\n{file_text}")
+            if file_text and file_text.strip():
+                fname = os.path.basename(fpath)
+                text_parts.append(f"=== ATTACHED DOCUMENT: {fname} ===\n{file_text.strip()}")
 
         combined = "\n\n".join(text_parts)
-        log_cb(f"🤖 Summarizing: {res['title'][:60]}...")
-        summary = summarizer.summarize(combined, log_callback=log_cb, max_chars=8000)
+        log_cb(f"🤖 Summarizing: {res['title'][:60]}... ({len(combined):,} chars)")
+        summary = summarizer.summarize(combined, log_callback=log_cb)
 
         records.append({
             "keyword": res["keyword"],
