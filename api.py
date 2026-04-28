@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import asyncio
 from pathlib import Path
@@ -88,40 +89,47 @@ def _format_excel(excel_path):
 
 
 def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
+    from agents.excel_writer import write_level1_report
     agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
     summarizer = SummarizerAgent()
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = str(OUTPUTS_DIR / f"Scrape_Results_{timestamp}.xlsx")
-
-    columns = ["S.no", "Website", "Keyword", "Document Name", "Summary"]
-    records = []
-    s_no = 1
-
+    excel_paths = []
     log_cb("🚀 Starting Agentic Scraper...")
+
+    def make_callback(kw):
+        """Return a per-keyword callback that fires immediately after each result is scraped."""
+        def on_result_ready(res):
+            title = res.get("title", "Unknown")
+            log_cb(f"📊 Summarizing: {title[:55]}...")
+            fields = summarizer.summarize_level1(res.get("content", ""), log_callback=log_cb)
+            record = {
+                "keyword": kw,
+                "title": title,
+                "url": res.get("url", ""),
+                "site": site_key,
+                "fields": fields,
+                "files": [],
+            }
+            tender_dir = Path(res["tender_dir"])
+            safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+            excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
+            write_level1_report([record], excel_path)
+            excel_paths.append(excel_path)
+            log_cb(f"✅ Saved: {excel_path}")
+        return on_result_ready
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
-        results = agent.search(site_key, kw, log_callback=log_cb)
-        if not results:
-            log_cb(f"   ↳ No results for '{kw}'")
-            continue
-        for res in results:
-            summary = summarizer.summarize(res.get("content", ""), log_callback=log_cb)
-            records.append([s_no, site_key, kw, res.get("title", "Unknown"), summary])
-            s_no += 1
+        # Pass callback into search() so it fires during the browser session,
+        # immediately after each result is downloaded — not after all are done.
+        agent.search(site_key, kw, log_callback=log_cb, on_result_ready=make_callback(kw))
 
-    wb = Workbook()
-    ws = wb.active
-    ws.append(columns)
-    for row in records:
-        ws.append(row)
-    OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
-    wb.save(output_path)
-    _format_excel(output_path)
+    if not excel_paths:
+        log_cb("⚠️ No results found.")
+        return None
 
-    log_cb(f"✅ Done. Excel saved: {output_path}")
-    return output_path
+    log_cb(f"✅ Done. {len(excel_paths)} Level 1 Excel(s) saved.")
+    return excel_paths[0]
 
 
 # ── UNGM scraper ─────────────────────────────────────────────────────────────
@@ -129,7 +137,7 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
 def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     from agents.ungm_scraper_agent import UNGMScraperAgent
     from agents.file_reader import read_file
-    from agents.doc_writer import write_report
+    from agents.excel_writer import write_level1_report
 
     email = credentials.get("email", "").strip()
     password = credentials.get("password", "")
@@ -141,26 +149,16 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = str(DOWNLOADS_DIR / "ungm" / timestamp)
-    output_path = str(OUTPUTS_DIR / f"UNGM_Report_{timestamp}.docx")
 
-    log_cb("🚀 Starting UNGM Agentic Scraper...")
-    if show_browser:
-        log_cb("👁️ Live browser mode enabled — watch Chromium on your screen.")
-    agent = UNGMScraperAgent()
-    raw_results = agent.scrape(email, password, keywords, run_dir, headless=not show_browser, log_callback=log_cb)
-
-    if not raw_results:
-        log_cb("⚠️ No tenders found across all keywords.")
-        return None
-
-    log_cb(f"📋 Building summaries for {len(raw_results)} tenders...")
     summarizer = SummarizerAgent()
-    records = []
+    excel_paths = []
 
-    for res in raw_results:
+    def on_tender_ready(res):
+        """Fires immediately after each tender is downloaded — summarise and save Excel now."""
+        title = res["title"]
+        log_cb(f"📊 Summarizing: {title[:55]}...")
+
         text_parts = []
-
-        # Verified fields scraped directly from UNGM structured HTML — ground truth
         verified = res.get("verified", {})
         if verified:
             lines = ["=== VERIFIED FIELDS (scraped directly from UNGM — treat as ground truth) ==="]
@@ -179,20 +177,40 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
                 text_parts.append(f"=== ATTACHED DOCUMENT: {fname} ===\n{file_text.strip()}")
 
         combined = "\n\n".join(text_parts)
-        log_cb(f"🤖 Summarizing: {res['title'][:60]}... ({len(combined):,} chars)")
-        summary = summarizer.summarize(combined, log_callback=log_cb)
+        fields = summarizer.summarize_level1(combined, log_callback=log_cb)
 
-        records.append({
+        record = {
             "keyword": res["keyword"],
-            "title": res["title"],
+            "title": title,
             "url": res["url"],
-            "summary": summary,
+            "site": "ungm",
+            "fields": fields,
             "files": res.get("files", []),
-        })
+        }
 
-    write_report(records, output_path)
-    log_cb(f"✅ Word report saved: {output_path}")
-    return output_path
+        # Save Excel inside the tender's own folder — alongside the downloaded PDFs
+        tender_dir = Path(res.get("tender_dir", run_dir))
+        safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+        excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
+        write_level1_report([record], excel_path)
+        excel_paths.append(excel_path)
+        log_cb(f"✅ Saved: {excel_path}")
+
+    log_cb("🚀 Starting UNGM Agentic Scraper...")
+    if show_browser:
+        log_cb("👁️ Live browser mode enabled — watch Chromium on your screen.")
+
+    agent = UNGMScraperAgent()
+    agent.scrape(email, password, keywords, run_dir,
+                 headless=not show_browser, log_callback=log_cb,
+                 on_tender_ready=on_tender_ready)
+
+    if not excel_paths:
+        log_cb("⚠️ No tenders found across all keywords.")
+        return None
+
+    log_cb(f"✅ Done. {len(excel_paths)} Level 1 Excel(s) saved in: {run_dir}")
+    return excel_paths[0]
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from groq import Groq
 
@@ -130,3 +131,132 @@ OUTPUT (use exactly the numbered format; place confidence marker immediately aft
                     continue
                 log(f"❌ Groq Error: {e}")
                 return "Error generating summary."
+
+    # ── Level 1 field extraction ──────────────────────────────────────────────
+
+    def summarize_level1(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT):
+        """Extract all Level 1 template fields from tender content. Returns a dict."""
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
+        if not text or len(text.strip()) < 20:
+            return {}
+
+        if not self.client:
+            return {"BID_TITLE": "(Groq Key Not Setup)"}
+
+        text_snippet = text[:max_chars]
+
+        prompt = f"""You are a senior procurement analyst for TMI (Training & Management International), specialising in e-learning, LMS, capacity building, and training technology tenders.
+
+Read EVERY section of the tender content below — VERIFIED FIELDS, notice page text, and ALL attached documents (including headers, footers, cover pages, contact sections, and annexes) — then extract the fields below.
+
+OUTPUT FORMAT — output ONLY these labeled lines, one per line, nothing else:
+FIELD_NAME: value
+
+EXTRACTION RULES:
+- VERIFIED FIELDS section is ground truth; use those values exactly.
+- Search the FULL text — fields like email addresses and reference codes often appear in page headers, footers, "Contact" or "How to Participate" sections, NOT in the main body.
+- Write "Not specified" ONLY when a field is genuinely absent from ALL content — not just from the summary paragraph.
+- Do NOT guess. Do NOT infer from context. Extract verbatim where possible.
+- TMI_SERVICE_LINE: exactly one of C&K / HR&KM / Both
+- ELIGIBILITY_FLAG: Yes / Conditional / Not specified
+- CONSORTIUM: Allowed / Not Allowed / Permitted with conditions / Not specified
+- SCOPE_CLARITY: Yes / Partially / No
+- Keep each value on ONE line (no line breaks inside a value).
+- SCOPE_OF_WORK, ELIGIBILITY_DETAILS, and ACCESS_REQUIREMENTS may be up to 500 chars.
+
+REQUIRED FIELDS:
+REFERENCE_NO: official tender reference or RFP number (e.g. IFAD/2026/006/RFP). Look for patterns like ORG/YEAR/NNN/TYPE or any alphanumeric code labelled "reference", "RFP no.", "tender no.", "notice ref."
+BID_TITLE: full official title of the tender — do not abbreviate
+PUBLISHED_ON: publication/notice date (e.g. 16-Apr-2026)
+PRE_BID_MEETING: pre-bid or pre-proposal meeting date/time, or Not specified
+DEADLINE: submission deadline with date, time, and timezone exactly as written
+INVITING_AUTHORITY: full official name of the inviting organisation — do NOT abbreviate
+CONTACT_EMAIL: procurement contact email address. Scan ALL sections for @ symbols, "Contact:", "Correspondence", "Enquiries" headings. If multiple emails, list them separated by semicolons.
+FUNDING_AGENCY: donor or funding agency (if same as inviting authority, repeat it)
+COUNTRY: country or region of project assignment
+DOMAIN: broad domain (e.g. IT, Education, Training, HR, Health)
+SUB_DOMAIN: specific technology or focus (e.g. LMS, Moodle, e-learning, capacity building)
+TMI_SERVICE_LINE: C&K or HR&KM or Both
+PROJECT_VALUE: estimated budget or contract value with currency and ceiling/estimate flag
+ELIGIBILITY_FLAG: Yes / Conditional / Not specified
+ELIGIBILITY_DETAILS: ALL eligibility criteria — entity type, years of experience, certifications, prior UN registration, any exclusions; include platform/registration prerequisites
+ACCESS_REQUIREMENTS: registration or platform requirements to access bid documents or submit a bid (e.g. must be registered on UNGM, must be IFAD-registered vendor, must use In-tend e-tendering portal). Look in "How to access", "Participation", "Registration" sections.
+DEPENDENCIES: technical, regulatory, or compliance prerequisites for delivery (infrastructure, GDPR, ISO standards, data residency, etc.)
+CONSORTIUM: Allowed / Not Allowed / Permitted with conditions / Not specified
+SCOPE_OF_WORK: COMPLETE and detailed scope — list ALL workstreams, deliverables, services, and technical requirements found across every section. Include: type of service/product, customisation, hosting, maintenance, support, training, geography, and duration.
+DELIVERY_PERIOD: contract duration or delivery timeline
+EMDS: earnest money deposit / bid bond amount and type, or Not required
+PAYMENT_TERMS: payment schedule or terms (e.g. milestone-based, monthly, advance payment)
+PRICING_CONDITIONS: specific pricing requirements — VAT treatment (net of / inclusive), fixed vs variable price, tax exemption status, currency restrictions. Look in commercial/financial conditions sections.
+SELECTION_CRITERIA: evaluation methodology (e.g. QCBS, L1, MEAT, RFP scoring breakdown)
+SCOPE_CLARITY: Yes / Partially / No — how clearly the scope is defined
+SCOPE_QUANTUM: brief characterisation of scale and complexity (e.g. "enterprise LMS + 600+ plugins, 5-year contract")
+CLARIFICATIONS: deadline and method for submitting clarifications/queries
+PENALTIES: liquidated damages or penalties for delay or non-performance
+
+TENDER CONTENT:
+{text_snippet}"""
+
+        log(f"🤖 [Summarizer] Extracting Level 1 fields from {len(text_snippet):,} chars...")
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a precise procurement analyst for TMI. "
+                    "Extract tender fields exactly as labeled. Never invent data. "
+                    "Output ONLY the labeled field lines — no headers, no explanations, no blank lines."
+                )
+            },
+            {"role": "user", "content": prompt}
+        ]
+
+        for attempt in range(3):
+            try:
+                response = self.client.chat.completions.create(
+                    messages=messages,
+                    model="llama-3.3-70b-versatile",
+                    temperature=0.1,
+                )
+                raw = response.choices[0].message.content.strip()
+                return self._parse_level1_fields(raw)
+            except Exception as e:
+                err_str = str(e)
+                is_rate_limit = ("413" in err_str or "429" in err_str or
+                                 "rate_limit" in err_str or "tokens per minute" in err_str.lower())
+                if is_rate_limit and attempt < 2:
+                    wait_s = 65 * (attempt + 1)
+                    log(f"⏳ Groq rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/3)...")
+                    time.sleep(wait_s)
+                    continue
+                log(f"❌ Groq Error: {e}")
+                return {}
+        return {}
+
+    _KNOWN_KEYS = {
+        "REFERENCE_NO", "BID_TITLE", "PUBLISHED_ON", "PRE_BID_MEETING", "DEADLINE",
+        "INVITING_AUTHORITY", "CONTACT_EMAIL", "FUNDING_AGENCY", "COUNTRY", "DOMAIN",
+        "SUB_DOMAIN", "TMI_SERVICE_LINE", "PROJECT_VALUE", "ELIGIBILITY_FLAG",
+        "ELIGIBILITY_DETAILS", "ACCESS_REQUIREMENTS", "DEPENDENCIES", "CONSORTIUM",
+        "SCOPE_OF_WORK", "DELIVERY_PERIOD", "EMDS", "PAYMENT_TERMS", "PRICING_CONDITIONS",
+        "SELECTION_CRITERIA", "SCOPE_CLARITY", "SCOPE_QUANTUM", "CLARIFICATIONS", "PENALTIES",
+    }
+
+    def _parse_level1_fields(self, raw: str) -> dict:
+        fields = {}
+        for line in raw.splitlines():
+            if ": " not in line:
+                continue
+            key, _, val = line.partition(": ")
+            key = key.strip()
+            if key not in self._KNOWN_KEYS:
+                continue
+            # Strip any confidence markers the model may have added
+            val = re.sub(r'^\[(?:VERIFIED|EXTRACTED|NOT_FOUND|V|MISMATCH[^\]]*)\]\s*', '', val).strip()
+            fields[key] = val
+        return fields

@@ -12,11 +12,13 @@ class UNGMScraperAgent:
     LOGIN_URL = "https://www.ungm.org/Login"
     NOTICES_URL = "https://www.ungm.org/Public/Notice"
 
-    def scrape(self, email: str, password: str, keywords: list, run_dir: str, headless: bool = True, log_callback=None) -> list:
+    def scrape(self, email: str, password: str, keywords: list, run_dir: str,
+               headless: bool = True, log_callback=None, on_tender_ready=None) -> list:
         """
         Full UNGM flow: login → per-keyword search → extract → download.
-        Returns list of dicts: {keyword, title, url, page_text, files:[paths]}
-        Set headless=False to watch the browser live on screen.
+        on_tender_ready(rec): optional callback fired immediately after each tender
+        is downloaded — use it to summarise and save while the next download runs.
+        Returns list of all result dicts.
         """
         def log(msg):
             if log_callback:
@@ -27,7 +29,7 @@ class UNGMScraperAgent:
         all_results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=30 if not headless else 0)
+            browser = p.chromium.launch(headless=headless, slow_mo=0)
             ctx = browser.new_context(accept_downloads=True)
             page = ctx.new_page()
             try:
@@ -36,8 +38,7 @@ class UNGMScraperAgent:
 
                 for keyword in keywords:
                     log(f"▶️ Keyword: '{keyword}'")
-                    # Pass ctx so _extract_tender can open separate pages for downloads
-                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log)
+                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log, on_tender_ready)
                     all_results.extend(kw_results)
                     log(f"   ↳ {len(kw_results)} tenders processed for '{keyword}'")
 
@@ -75,7 +76,11 @@ class UNGMScraperAgent:
             email_input.fill(email)
             page.locator("input#Password").fill(password)
             page.locator("button:has-text('Log in')").click()
-            page.wait_for_timeout(4000)
+            # Wait for redirect away from /Login rather than sleeping a fixed time
+            try:
+                page.wait_for_url(lambda u: "/Login" not in u, timeout=10000)
+            except Exception:
+                pass
         except Exception as e:
             log(f"❌ Login form error: {e}")
             return False
@@ -87,7 +92,7 @@ class UNGMScraperAgent:
         log("✅ Logged in.")
         return True
 
-    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log) -> list:
+    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None) -> list:
         if not self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle"):
             return []
 
@@ -100,7 +105,8 @@ class UNGMScraperAgent:
             if not cb.is_checked():
                 cb.check()
             log("   ✓ Active-only filter enabled")
-            page.wait_for_timeout(1500)   # 1.5s is enough for Active AJAX to register
+            # Wait for the AJAX triggered by the checkbox to settle
+            page.wait_for_load_state("networkidle", timeout=5000)
         except Exception as e:
             log(f"   ℹ️ Active-only checkbox not found: {e}")
 
@@ -111,7 +117,6 @@ class UNGMScraperAgent:
             title_input.press("Control+a")
             # press_sequentially fires real keyboard events — fill() bypasses them on AJAX forms
             title_input.press_sequentially(keyword, delay=40)
-            page.wait_for_timeout(500)
         except Exception as e:
             log(f"   ❌ Could not fill keyword: {e}")
             return []
@@ -142,26 +147,16 @@ class UNGMScraperAgent:
         except Exception:
             pass
 
-        # Scope links to #tblNotices only — avoids picking up stale DOM links
-        # left behind by the Active-filter AJAX that fired earlier
+        # Collect all notice hrefs in ONE JS call — no per-element round trips
         try:
-            link_els = page.locator("#tblNotices a[href*='/Public/Notice/']").all()
+            raw_hrefs = page.eval_on_selector_all(
+                "#tblNotices a[href*='/Public/Notice/']",
+                "els => [...new Set(els.map(e => e.href))].filter(h => /\\/Public\\/Notice\\/\\d+/.test(h))"
+            )
         except Exception:
-            link_els = []
+            raw_hrefs = []
 
-        hrefs = []
-        for el in link_els:
-            try:
-                href = el.get_attribute("href") or ""
-                if re.search(r"/Public/Notice/\d+", href):
-                    if not href.startswith("http"):
-                        href = self.BASE_URL + href
-                    if href not in hrefs:
-                        hrefs.append(href)
-                        if len(hrefs) >= RESULTS_CAP:
-                            break
-            except Exception:
-                continue
+        hrefs = raw_hrefs[:RESULTS_CAP]
 
         if not hrefs:
             log(f"   ↳ No results found")
@@ -175,25 +170,59 @@ class UNGMScraperAgent:
             rec = self._extract_tender(page, ctx, href, keyword, run_dir, log)
             if rec:
                 results.append(rec)
+                if on_tender_ready:
+                    on_tender_ready(rec)   # summarise + save Excel immediately
 
         return results
 
-    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log) -> dict | None:
-        if not self._goto(page, url, log, wait_for="h1"):
-            return None
+    _ERROR_SIGNALS = {
+        "internal server error", "404", "not found", "access denied",
+        "forbidden", "page not found", "error 500", "bad request",
+    }
 
+    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log) -> dict | None:
+        """
+        Open the notice in a FRESH TAB so the search-results page stays intact.
+        The original `page` is never navigated away — only used for keyword search.
+        """
+        notice_page = ctx.new_page()
         try:
+            log(f"      🔄 Opening notice page...")
+            try:
+                notice_page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            except Exception as nav_e:
+                log(f"      ❌ Navigation error: {nav_e}")
+                return None
+
+            # Wait for the heading to confirm real content loaded
+            try:
+                notice_page.locator("h1").wait_for(state="visible", timeout=10000)
+            except Exception:
+                log(f"      ⚠️ Page did not render (h1 not visible after 10 s) — skipping.")
+                return None
+
+            # Session-expired: UNGM redirects silently to /Login
+            if "/Login" in notice_page.url or "/login" in notice_page.url:
+                log(f"      ⚠️ Session expired — redirected to login. Skipping.")
+                return None
+
             # Title
             try:
-                title = page.locator("h1").first.text_content().strip()
+                title = notice_page.locator("h1").first.text_content().strip()
             except Exception:
                 title = url.rstrip("/").split("/")[-1]
 
-            # Scrape verified structured fields directly from the page labels
-            # These are ground truth — no LLM inference needed for them
+            # Bail out on error pages — skip rather than waste an LLM call on garbage
+            if any(sig in title.lower() for sig in self._ERROR_SIGNALS):
+                log(f"      ⚠️ Error page ('{title}') — skipping.")
+                return None
+
+            log(f"      📋 {title[:70]}")
+
+            # Verified structured fields (ground truth — no LLM needed)
             verified = {}
             try:
-                for lbl_el in page.locator("span.label").all():
+                for lbl_el in notice_page.locator("span.label").all():
                     try:
                         label = lbl_el.text_content().strip().rstrip(":")
                         parent_text = lbl_el.locator("..").text_content().strip()
@@ -205,26 +234,27 @@ class UNGMScraperAgent:
             except Exception:
                 pass
 
+            if verified:
+                log(f"      ✅ {len(verified)} verified fields scraped")
+
             # Full visible page text
             try:
-                body_text = page.locator("body").text_content()
+                body_text = notice_page.locator("body").text_content()
                 body_text = re.sub(r"[ \t]+", " ", body_text)
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
 
-            # Short paths — Windows MAX_PATH is 260 chars
+            # Folder for this tender (short paths — Windows MAX_PATH = 260)
             safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
             safe_title = re.sub(r'[\\/*?:"<>|]',   "_", title)[:35].strip("_. ")
             tender_dir = Path(run_dir) / safe_kw / safe_title
             tender_dir.mkdir(parents=True, exist_ok=True)
 
-            # Collect all download hrefs BEFORE touching any of them
-            # (clicking a download link on the main page can navigate it away)
+            # Collect all download hrefs before clicking any
             att_hrefs = []
             try:
-                att_els = page.locator("a[href*='DownloadDocument']").all()
-                for att_el in att_els:
+                for att_el in notice_page.locator("a[href*='DownloadDocument']").all():
                     href = att_el.get_attribute("href") or ""
                     if href:
                         if not href.startswith("http"):
@@ -233,7 +263,10 @@ class UNGMScraperAgent:
             except Exception:
                 pass
 
-            # Download each file on a SEPARATE page so the main page stays alive
+            if att_hrefs:
+                log(f"      📎 {len(att_hrefs)} attachment(s) found")
+
+            # Download each attachment in its own tab
             downloaded = []
             for att_href in att_hrefs:
                 dl_page = None
@@ -241,8 +274,6 @@ class UNGMScraperAgent:
                     dl_page = ctx.new_page()
                     with dl_page.expect_download(timeout=30000) as dl_info:
                         try:
-                            # goto() raises "Download is starting" for file responses —
-                            # that is expected; the download is still caught by expect_download
                             dl_page.goto(att_href, wait_until="commit", timeout=30000)
                         except Exception:
                             pass
@@ -266,8 +297,7 @@ class UNGMScraperAgent:
                         except Exception:
                             pass
 
-            # If no attachments exist, save page text as a .txt file so the
-            # summarizer has something to read from the folder
+            # No attachments → fall back to page text
             if not downloaded and body_text:
                 txt_path = tender_dir / "page_content.txt"
                 with open(txt_path, "w", encoding="utf-8") as f:
@@ -281,9 +311,15 @@ class UNGMScraperAgent:
                 "url": url,
                 "page_text": body_text,
                 "files": downloaded,
-                "verified": verified,   # directly scraped structured fields
+                "verified": verified,
+                "tender_dir": str(tender_dir),
             }
 
         except Exception as e:
-            log(f"   ❌ Extraction error on {url}: {e}")
+            log(f"      ❌ Extraction error on {url}: {e}")
             return None
+        finally:
+            try:
+                notice_page.close()
+            except Exception:
+                pass
