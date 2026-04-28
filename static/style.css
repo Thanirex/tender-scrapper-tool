@@ -44,13 +44,10 @@ body {
 
 .top-bar {
     width: 100%;
-    padding: 1.5rem 2rem;
     display: flex;
     justify-content: flex-end;
-    position: absolute;
-    top: 0;
-    left: 0;
-    z-index: 10;
+    margin-bottom: 1rem;
+    padding-top: 0.5rem;
 }
 
 .cnk-logo {
@@ -62,7 +59,7 @@ body {
 
 .container {
     max-width: 1200px;
-    margin: 4rem auto 2rem auto;
+    margin: 0 auto 2rem auto;
     padding: 2rem;
 }
 
@@ -79,7 +76,12 @@ header h1 {
     margin-bottom: 0.5rem;
 }
 
-header p { display: none; } /* Subtitle removed for cleaner look as requested */
+header p {
+    color: var(--gray);
+    font-size: 1.15rem;
+    font-weight: 500;
+    margin-top: 0.5rem;
+}
 
 .main-content {
     display: grid;
