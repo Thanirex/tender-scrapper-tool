@@ -44,10 +44,21 @@ body {
 
 .top-bar {
     width: 100%;
+    padding: 1.5rem 3rem;
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 1rem;
-    padding-top: 0.5rem;
+    justify-content: space-between;
+    align-items: center;
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 10;
+}
+
+.top-bar-left {
+    font-size: 1.6rem;
+    font-weight: 800;
+    color: var(--black);
+    letter-spacing: 1px;
 }
 
 .cnk-logo {
