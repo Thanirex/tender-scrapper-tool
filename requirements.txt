@@ -1,5 +1,6 @@
 playwright
-groq
+google-generativeai
+# groq
 openpyxl
 python-dotenv
 pdfplumber

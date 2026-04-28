@@ -27,6 +27,7 @@ _init_paths()
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory=str(APP_DIR / "static")), name="static")
+app.mount("/assets", StaticFiles(directory=str(APP_DIR / "Assets")), name="assets")
 
 
 @app.get("/")

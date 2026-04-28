@@ -70,7 +70,30 @@ document.addEventListener('DOMContentLoaded', () => {
             div.className = `log-line ${type}`;
         }
         
-        div.textContent = msg;
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], {hour12: false, hour: '2-digit', minute:'2-digit', second:'2-digit'});
+        
+        let prefix = '[LOG]';
+        if (type === 'error') prefix = '[ERROR]';
+        else if (type === 'success') prefix = '[SUCCESS]';
+        else if (type === 'info') prefix = '[INFO]';
+        else if (type === 'system') prefix = '[SYSTEM]';
+        
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'timestamp';
+        timeSpan.textContent = `[${timeStr}]`;
+        
+        const prefixSpan = document.createElement('span');
+        prefixSpan.className = 'prefix';
+        prefixSpan.textContent = prefix;
+        
+        const textSpan = document.createElement('span');
+        textSpan.textContent = ` ${msg}`;
+        
+        div.appendChild(timeSpan);
+        div.appendChild(prefixSpan);
+        div.appendChild(textSpan);
+        
         terminal.appendChild(div);
         terminal.scrollTop = terminal.scrollHeight;
     }
@@ -124,8 +147,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.type === 'log') {
                 appendLog(data.message);
             } else if (data.type === 'complete') {
-                statusBadge.className = 'badge done';
-                statusBadge.textContent = 'Done';
+                statusBadge.className = 'badge completed';
+                statusBadge.textContent = 'Completed';
                 downloadArea.classList.remove('hidden');
                 downloadBtn.href = `/download?file=${encodeURIComponent(data.file)}`;
                 downloadBtn.textContent = data.file.endsWith('.docx')
@@ -133,8 +156,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     : '📥 Download Excel Report';
                 finishRun();
             } else if (data.type === 'error') {
-                statusBadge.className = 'badge error';
-                statusBadge.textContent = 'Error';
+                statusBadge.className = 'badge failed';
+                statusBadge.textContent = 'Failed';
                 appendLog(data.message, 'error');
                 finishRun();
             }
@@ -142,7 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         ws.onerror = (error) => {
             appendLog('WebSocket error occurred.', 'error');
-            statusBadge.className = 'badge error';
+            statusBadge.className = 'badge failed';
             statusBadge.textContent = 'Disconnected';
             finishRun();
         };
@@ -150,7 +173,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onclose = () => {
             if (statusBadge.textContent === 'Running') {
                 appendLog('Connection closed unexpectedly.', 'error');
-                statusBadge.className = 'badge error';
+                statusBadge.className = 'badge failed';
                 statusBadge.textContent = 'Disconnected';
                 finishRun();
             }

@@ -5,9 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tender Scrapper - Pro</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
+    <div class="top-bar">
+        <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.src='https://via.placeholder.com/150x50?text=CNK+Logo'">
+    </div>
+    
     <div class="background-blobs">
         <div class="blob blob-1"></div>
         <div class="blob blob-2"></div>
@@ -16,13 +20,12 @@
     <div class="container">
         <header>
             <h1>Tender Scrapper</h1>
-            <p>Agentic Data Extraction & LLM Summarization</p>
         </header>
 
         <div class="main-content">
             <aside class="controls glass-panel">
                 <div class="input-group">
-                    <label for="site-select">Target Website</label>
+                    <label for="site-select"><span class="step-badge">1</span> Target Website</label>
                     <select id="site-select">
                         <option value="" disabled selected>Loading...</option>
                     </select>
@@ -49,21 +52,23 @@
                 </div>
 
                 <div class="input-group">
-                    <label>Select Category</label>
+                    <label><span class="step-badge">2</span> Select Category</label>
                     <select id="category-select">
                         <option value="" disabled selected>Loading categories...</option>
                     </select>
                 </div>
 
                 <div class="input-group">
-                    <label>Keywords (Comma separated)</label>
+                    <label><span class="step-badge">3</span> Keywords (Comma separated)</label>
                     <textarea id="keywords-input" placeholder="e.g. Digital Education, eLearning..." rows="4"></textarea>
                 </div>
 
-                <button id="start-btn" class="primary-btn">
-                    <span class="btn-text">Start Scraping</span>
-                    <div class="loader hidden"></div>
-                </button>
+                <div class="input-group" style="margin-top: 1rem;">
+                    <button id="start-btn" class="primary-btn">
+                        <span class="btn-text">Start Scraping</span>
+                        <div class="loader hidden"></div>
+                    </button>
+                </div>
             </aside>
 
             <section class="live-feed glass-panel">
@@ -72,7 +77,7 @@
                     <span id="status-badge" class="badge idle">Idle</span>
                 </div>
                 <div class="terminal" id="terminal">
-                    <div class="log-line system">Ready to launch...</div>
+                    <div class="log-line system"><span class="timestamp">[00:00:00]</span><span class="prefix">[SYSTEM]</span><span> Ready to launch...</span></div>
                 </div>
                 <div id="download-area" class="download-area hidden">
                     <a id="download-btn" href="#" class="success-btn" download>📥 Download Excel Report</a>

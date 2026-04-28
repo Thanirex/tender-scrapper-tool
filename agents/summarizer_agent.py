@@ -1,39 +1,147 @@
 import os
 import re
 import time
-from groq import Groq
+# from groq import Groq
+import google.generativeai as genai
 
-
-# Free-tier TPM cap is 12,000 tokens/min.
-# Prompt overhead ≈ 2,200 tokens → content budget ≈ 9,800 tokens ≈ 28,000 chars.
-_MAX_CHARS_DEFAULT = 28000
+_MAX_CHARS_DEFAULT = 500_000
+# _MODEL = "llama-3.1-8b-instant"   # Groq model
+_MODEL = "gemini-2.5-flash-lite"          # Gemini model
+# _TEMPERATURE = 0.1                 # Groq temperature (Gemini uses generation_config instead)
+_MAX_RETRIES = 3
+_RATE_LIMIT_BACKOFF_S = 65
 
 
 class SummarizerAgent:
+
+    _KNOWN_KEYS = {
+        "REFERENCE_NO", "BID_TITLE", "PUBLISHED_ON", "PRE_BID_MEETING", "DEADLINE",
+        "INVITING_AUTHORITY", "CONTACT_EMAIL", "FUNDING_AGENCY", "COUNTRY", "DOMAIN",
+        "SUB_DOMAIN", "TMI_SERVICE_LINE", "PROJECT_VALUE", "ELIGIBILITY_FLAG",
+        "ELIGIBILITY_DETAILS", "ACCESS_REQUIREMENTS", "DEPENDENCIES", "CONSORTIUM",
+        "SCOPE_OF_WORK", "DELIVERY_PERIOD", "EMDS", "PAYMENT_TERMS", "PRICING_CONDITIONS",
+        "SELECTION_CRITERIA", "SCOPE_CLARITY", "SCOPE_QUANTUM", "CLARIFICATIONS", "PENALTIES",
+    }
+
     def __init__(self):
-        api_key = os.getenv("GROQ_API_KEY")
-        if not api_key or api_key == "your_groq_api_key_here":
-            print("⚠️ WARNING: Invalid or missing GROQ_API_KEY in .env. Falling back to dummy mode.")
+        # ── Groq client (commented out) ──────────────────────────────────────
+        # api_key = os.getenv("GROQ_API_KEY")
+        # if not api_key or api_key == "your_groq_api_key_here":
+        #     print("⚠️ WARNING: Invalid or missing GROQ_API_KEY in .env. Falling back to dummy mode.")
+        #     self.client = None
+        # else:
+        #     self.client = Groq(api_key=api_key)
+
+        # ── Gemini client ─────────────────────────────────────────────────────
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key or api_key == "your_gemini_api_key_here":
+            print("⚠️ WARNING: Invalid or missing GEMINI_API_KEY in .env. Falling back to dummy mode.")
             self.client = None
         else:
-            self.client = Groq(api_key=api_key)
+            genai.configure(api_key=api_key)
+            self.client = True  # configured globally via genai.configure
+
+    # ── Public methods ────────────────────────────────────────────────────────
 
     def summarize(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT):
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
-            else:
-                print(msg)
+        log = self._make_logger(log_callback)
 
-        if not text or len(text.strip()) < 20:
+        if not self._has_content(text):
             return "No meaningful content found to summarize."
-
         if not self.client:
-            return "(Groq Key Not Setup) - Placeholder Summary."
+            return "(Gemini Key Not Setup) - Placeholder Summary."
 
-        text_snippet = text[:max_chars]
+        snippet = text[:max_chars]
+        log(f"🤖 [Summarizer] Reading {len(snippet):,} chars across page + documents...")
 
-        prompt = f"""You are a senior procurement analyst specializing in e-learning, digital education, capacity building, and training technology tenders for international development organizations (UN agencies, NGOs, governments).
+        system = (
+            "You are a precise procurement analyst. "
+            "You read tender documents carefully and extract specific factual information. "
+            "You never invent information — if something is not in the provided content you say 'Not specified'. "
+            "You always check ALL sections of the provided content, including tables, footers, and appendices."
+        )
+        prompt = self._build_summarize_prompt(snippet)
+        raw = self._call_api(system, prompt, log, error_return="Error generating summary.")
+        return raw
+
+    def summarize_level1(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT):
+        """Extract all Level 1 template fields from tender content. Returns a dict."""
+        log = self._make_logger(log_callback)
+
+        if not self._has_content(text):
+            return {}
+        if not self.client:
+            return {"BID_TITLE": "(Gemini Key Not Setup)"}
+
+        snippet = text[:max_chars]
+        log(f"🤖 [Summarizer] Extracting Level 1 fields from {len(snippet):,} chars...")
+
+        system = (
+            "You are a precise procurement analyst for TMI. "
+            "Extract tender fields exactly as labeled. Never invent data. "
+            "Output ONLY the labeled field lines — no headers, no explanations, no blank lines."
+        )
+        prompt = self._build_level1_prompt(snippet)
+        raw = self._call_api(system, prompt, log, error_return=None)
+        if raw is None:
+            return {}
+        return self._parse_level1_fields(raw)
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _make_logger(log_callback):
+        """Return a unified log function that routes to the callback or stdout."""
+        return log_callback if log_callback else print
+
+    @staticmethod
+    def _has_content(text) -> bool:
+        return bool(text and len(text.strip()) >= 20)
+
+    def _call_api(self, system: str, prompt: str, log, error_return):
+        """
+        Call Gemini with retry on rate-limit (HTTP 429 / RESOURCE_EXHAUSTED).
+        Returns the stripped response string, or error_return on failure.
+        """
+        # ── Groq call (commented out) ─────────────────────────────────────────
+        # messages = [
+        #     {"role": "system", "content": system},
+        #     {"role": "user",   "content": prompt},
+        # ]
+        # response = self.client.chat.completions.create(
+        #     messages=messages,
+        #     model=_MODEL,
+        #     temperature=_TEMPERATURE,
+        # )
+        # return response.choices[0].message.content.strip()
+
+        # ── Gemini call ───────────────────────────────────────────────────────
+        model = genai.GenerativeModel(
+            model_name=_MODEL,
+            system_instruction=system,
+        )
+        for attempt in range(_MAX_RETRIES):
+            try:
+                response = model.generate_content(prompt)
+                return response.text.strip()
+            except Exception as e:
+                err = str(e)
+                is_rate_limit = (
+                    "429" in err or "RESOURCE_EXHAUSTED" in err or
+                    "quota" in err.lower() or "rate" in err.lower()
+                )
+                if is_rate_limit and attempt < _MAX_RETRIES - 1:
+                    wait_s = _RATE_LIMIT_BACKOFF_S * (attempt + 1)
+                    log(f"⏳ Gemini rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/{_MAX_RETRIES})...")
+                    time.sleep(wait_s)
+                    continue
+                log(f"❌ Gemini Error: {e}")
+                return error_return
+        return error_return
+
+    @staticmethod
+    def _build_summarize_prompt(snippet: str) -> str:
+        return f"""You are a senior procurement analyst specializing in e-learning, digital education, capacity building, and training technology tenders for international development organizations (UN agencies, NGOs, governments).
 
 You have been given content extracted from a UN Global Marketplace (UNGM) procurement notice. The content includes labeled sections:
 
@@ -84,7 +192,7 @@ Contract value / total budget. Search ALL content — this appears as "budget", 
 ---
 
 TENDER CONTENT:
-{text_snippet}
+{snippet}
 
 ---
 
@@ -96,61 +204,9 @@ OUTPUT (use exactly the numbered format; place confidence marker immediately aft
 4. Eligibility criteria: [MARKER] value here
 5. Quantum: [MARKER] value here"""
 
-        log(f"🤖 [Summarizer] Reading {len(text_snippet):,} chars across page + documents...")
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise procurement analyst. "
-                    "You read tender documents carefully and extract specific factual information. "
-                    "You never invent information — if something is not in the provided content you say 'Not specified'. "
-                    "You always check ALL sections of the provided content, including tables, footers, and appendices."
-                )
-            },
-            {"role": "user", "content": prompt}
-        ]
-
-        # Retry up to 3 times on rate-limit (413/429); back off 65 s to let the TPM window reset.
-        for attempt in range(3):
-            try:
-                response = self.client.chat.completions.create(
-                    messages=messages,
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.1,
-                )
-                return response.choices[0].message.content.strip()
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = ("413" in err_str or "429" in err_str or
-                                 "rate_limit" in err_str or "tokens per minute" in err_str.lower())
-                if is_rate_limit and attempt < 2:
-                    wait_s = 65 * (attempt + 1)
-                    log(f"⏳ Groq rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/3)...")
-                    time.sleep(wait_s)
-                    continue
-                log(f"❌ Groq Error: {e}")
-                return "Error generating summary."
-
-    # ── Level 1 field extraction ──────────────────────────────────────────────
-
-    def summarize_level1(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT):
-        """Extract all Level 1 template fields from tender content. Returns a dict."""
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
-            else:
-                print(msg)
-
-        if not text or len(text.strip()) < 20:
-            return {}
-
-        if not self.client:
-            return {"BID_TITLE": "(Groq Key Not Setup)"}
-
-        text_snippet = text[:max_chars]
-
-        prompt = f"""You are a senior procurement analyst for TMI (Training & Management International), specialising in e-learning, LMS, capacity building, and training technology tenders.
+    @staticmethod
+    def _build_level1_prompt(snippet: str) -> str:
+        return f"""You are a senior procurement analyst for TMI (Training & Management International), specialising in e-learning, LMS, capacity building, and training technology tenders.
 
 Read EVERY section of the tender content below — VERIFIED FIELDS, notice page text, and ALL attached documents (including headers, footers, cover pages, contact sections, and annexes) — then extract the fields below.
 
@@ -200,52 +256,7 @@ CLARIFICATIONS: deadline and method for submitting clarifications/queries
 PENALTIES: liquidated damages or penalties for delay or non-performance
 
 TENDER CONTENT:
-{text_snippet}"""
-
-        log(f"🤖 [Summarizer] Extracting Level 1 fields from {len(text_snippet):,} chars...")
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a precise procurement analyst for TMI. "
-                    "Extract tender fields exactly as labeled. Never invent data. "
-                    "Output ONLY the labeled field lines — no headers, no explanations, no blank lines."
-                )
-            },
-            {"role": "user", "content": prompt}
-        ]
-
-        for attempt in range(3):
-            try:
-                response = self.client.chat.completions.create(
-                    messages=messages,
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.1,
-                )
-                raw = response.choices[0].message.content.strip()
-                return self._parse_level1_fields(raw)
-            except Exception as e:
-                err_str = str(e)
-                is_rate_limit = ("413" in err_str or "429" in err_str or
-                                 "rate_limit" in err_str or "tokens per minute" in err_str.lower())
-                if is_rate_limit and attempt < 2:
-                    wait_s = 65 * (attempt + 1)
-                    log(f"⏳ Groq rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/3)...")
-                    time.sleep(wait_s)
-                    continue
-                log(f"❌ Groq Error: {e}")
-                return {}
-        return {}
-
-    _KNOWN_KEYS = {
-        "REFERENCE_NO", "BID_TITLE", "PUBLISHED_ON", "PRE_BID_MEETING", "DEADLINE",
-        "INVITING_AUTHORITY", "CONTACT_EMAIL", "FUNDING_AGENCY", "COUNTRY", "DOMAIN",
-        "SUB_DOMAIN", "TMI_SERVICE_LINE", "PROJECT_VALUE", "ELIGIBILITY_FLAG",
-        "ELIGIBILITY_DETAILS", "ACCESS_REQUIREMENTS", "DEPENDENCIES", "CONSORTIUM",
-        "SCOPE_OF_WORK", "DELIVERY_PERIOD", "EMDS", "PAYMENT_TERMS", "PRICING_CONDITIONS",
-        "SELECTION_CRITERIA", "SCOPE_CLARITY", "SCOPE_QUANTUM", "CLARIFICATIONS", "PENALTIES",
-    }
+{snippet}"""
 
     def _parse_level1_fields(self, raw: str) -> dict:
         fields = {}
@@ -256,7 +267,6 @@ TENDER CONTENT:
             key = key.strip()
             if key not in self._KNOWN_KEYS:
                 continue
-            # Strip any confidence markers the model may have added
             val = re.sub(r'^\[(?:VERIFIED|EXTRACTED|NOT_FOUND|V|MISMATCH[^\]]*)\]\s*', '', val).strip()
             fields[key] = val
         return fields
