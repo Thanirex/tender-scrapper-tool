@@ -297,13 +297,18 @@ class UNGMScraperAgent:
                         except Exception:
                             pass
 
-            # No attachments → fall back to page text
-            if not downloaded and body_text:
+            # Always save page text to disk for archiving.
+            # Only add to `files` when there are no other attachments — api.py already sends
+            # page_text to the LLM separately, so adding it again would duplicate content.
+            if body_text:
                 txt_path = tender_dir / "page_content.txt"
                 with open(txt_path, "w", encoding="utf-8") as f:
                     f.write(f"Source: {url}\n\n{body_text}")
-                downloaded.append(str(txt_path))
-                log(f"      📝 No attachments — saved page text as page_content.txt")
+                if not downloaded:
+                    downloaded.append(str(txt_path))
+                    log(f"      📝 No attachments — saved page text as page_content.txt")
+                else:
+                    log(f"      📝 Page content saved to disk alongside documents")
 
             return {
                 "keyword": keyword,

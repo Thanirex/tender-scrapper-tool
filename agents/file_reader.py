@@ -48,7 +48,26 @@ def _read_pdf(path: str) -> str:
 
 def _read_docx(path: str) -> str:
     doc = Document(path)
-    return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    parts = []
+
+    from docx.text.paragraph import Paragraph
+    from docx.table import Table
+
+    # Walk the document body in order: paragraphs and tables are interleaved
+    for block in doc.element.body:
+        tag = block.tag.split("}")[-1] if "}" in block.tag else block.tag
+        if tag == "p":
+            para = Paragraph(block, doc)
+            if para.text.strip():
+                parts.append(para.text.strip())
+        elif tag == "tbl":
+            tbl = Table(block, doc)
+            for row in tbl.rows:
+                row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                if row_text:
+                    parts.append(f"[TABLE] {row_text}")
+
+    return "\n".join(parts)
 
 
 def _read_excel(path: str) -> str:

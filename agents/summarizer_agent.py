@@ -6,7 +6,7 @@ import google.generativeai as genai
 
 _MAX_CHARS_DEFAULT = 500_000
 # _MODEL = "llama-3.1-8b-instant"   # Groq model
-_MODEL = "gemini-2.5-flash-lite"          # Gemini model
+_MODEL = "gemma-4-31b-it"          # Gemini model
 # _TEMPERATURE = 0.1                 # Groq temperature (Gemini uses generation_config instead)
 _MAX_RETRIES = 3
 _RATE_LIMIT_BACKOFF_S = 65
@@ -16,8 +16,9 @@ class SummarizerAgent:
 
     _KNOWN_KEYS = {
         "REFERENCE_NO", "BID_TITLE", "PUBLISHED_ON", "PRE_BID_MEETING", "DEADLINE",
+        "DEADLINE_REMARKS",
         "INVITING_AUTHORITY", "CONTACT_EMAIL", "FUNDING_AGENCY", "COUNTRY", "DOMAIN",
-        "SUB_DOMAIN", "TMI_SERVICE_LINE", "PROJECT_VALUE", "ELIGIBILITY_FLAG",
+        "SUB_DOMAIN", "TMI_SERVICE_LINE", "PROJECT_VALUE",
         "ELIGIBILITY_DETAILS", "ACCESS_REQUIREMENTS", "DEPENDENCIES", "CONSORTIUM",
         "SCOPE_OF_WORK", "DELIVERY_PERIOD", "EMDS", "PAYMENT_TERMS", "PRICING_CONDITIONS",
         "SELECTION_CRITERIA", "SCOPE_CLARITY", "SCOPE_QUANTUM", "CLARIFICATIONS", "PENALTIES",
@@ -219,7 +220,6 @@ EXTRACTION RULES:
 - Write "Not specified" ONLY when a field is genuinely absent from ALL content — not just from the summary paragraph.
 - Do NOT guess. Do NOT infer from context. Extract verbatim where possible.
 - TMI_SERVICE_LINE: exactly one of C&K / HR&KM / Both
-- ELIGIBILITY_FLAG: Yes / Conditional / Not specified
 - CONSORTIUM: Allowed / Not Allowed / Permitted with conditions / Not specified
 - SCOPE_CLARITY: Yes / Partially / No
 - Keep each value on ONE line (no line breaks inside a value).
@@ -230,7 +230,8 @@ REFERENCE_NO: official tender reference or RFP number (e.g. IFAD/2026/006/RFP). 
 BID_TITLE: full official title of the tender — do not abbreviate
 PUBLISHED_ON: publication/notice date (e.g. 16-Apr-2026)
 PRE_BID_MEETING: pre-bid or pre-proposal meeting date/time, or Not specified
-DEADLINE: submission deadline with date, time, and timezone exactly as written
+DEADLINE: submission deadline with date, time, and timezone EXACTLY as written. PRIORITY RULE: If any deadline value appears in the VERIFIED FIELDS section (e.g. "Deadline on"), copy it character-for-character — never modify, paraphrase, or convert the timezone. If no VERIFIED deadline exists, search attached documents.
+DEADLINE_REMARKS: Capture two types of additional deadline context here — (a) Document deadline conflict: if any attached document states a submission deadline that DIFFERS from the VERIFIED FIELDS deadline, record it exactly as: "Document states: [exact text from document]"; (b) IST conversion: if the primary deadline's timezone is NOT IST (India Standard Time, UTC+5:30), compute the IST equivalent and add: "IST equivalent: [converted date/time] IST". Combine both with " | " if both apply. Write "Not specified" if neither condition applies.
 INVITING_AUTHORITY: full official name of the inviting organisation — do NOT abbreviate
 CONTACT_EMAIL: procurement contact email address. Scan ALL sections for @ symbols, "Contact:", "Correspondence", "Enquiries" headings. If multiple emails, list them separated by semicolons.
 FUNDING_AGENCY: donor or funding agency (if same as inviting authority, repeat it)
@@ -239,12 +240,11 @@ DOMAIN: broad domain (e.g. IT, Education, Training, HR, Health)
 SUB_DOMAIN: specific technology or focus (e.g. LMS, Moodle, e-learning, capacity building)
 TMI_SERVICE_LINE: C&K or HR&KM or Both
 PROJECT_VALUE: estimated budget or contract value with currency and ceiling/estimate flag
-ELIGIBILITY_FLAG: Yes / Conditional / Not specified
-ELIGIBILITY_DETAILS: ALL eligibility criteria — entity type, years of experience, certifications, prior UN registration, any exclusions; include platform/registration prerequisites
+ELIGIBILITY_DETAILS: ALL eligibility criteria found in any section or attached document — entity type, minimum years of experience, required certifications, prior UN/UNGM registration requirements, language requirements, and any exclusions. Extract verbatim; do not judge eligibility.
 ACCESS_REQUIREMENTS: registration or platform requirements to access bid documents or submit a bid (e.g. must be registered on UNGM, must be IFAD-registered vendor, must use In-tend e-tendering portal). Look in "How to access", "Participation", "Registration" sections.
 DEPENDENCIES: technical, regulatory, or compliance prerequisites for delivery (infrastructure, GDPR, ISO standards, data residency, etc.)
 CONSORTIUM: Allowed / Not Allowed / Permitted with conditions / Not specified
-SCOPE_OF_WORK: COMPLETE and detailed scope — list ALL workstreams, deliverables, services, and technical requirements found across every section. Include: type of service/product, customisation, hosting, maintenance, support, training, geography, and duration.
+SCOPE_OF_WORK: Extract ONLY what is explicitly stated in the provided content — never infer, assume, or generalise. List ALL workstreams, deliverables, services, and technical requirements verbatim. Include: type of service/product, customisation scope, hosting/infrastructure, maintenance and support obligations, training components, geographic coverage, and timeline. Pull from ALL sections including tables, annexes, technical specifications, and appendices. Do NOT add anything that is not present in the text.
 DELIVERY_PERIOD: contract duration or delivery timeline
 EMDS: earnest money deposit / bid bond amount and type, or Not required
 PAYMENT_TERMS: payment schedule or terms (e.g. milestone-based, monthly, advance payment)
@@ -252,7 +252,7 @@ PRICING_CONDITIONS: specific pricing requirements — VAT treatment (net of / in
 SELECTION_CRITERIA: evaluation methodology (e.g. QCBS, L1, MEAT, RFP scoring breakdown)
 SCOPE_CLARITY: Yes / Partially / No — how clearly the scope is defined
 SCOPE_QUANTUM: brief characterisation of scale and complexity (e.g. "enterprise LMS + 600+ plugins, 5-year contract")
-CLARIFICATIONS: deadline and method for submitting clarifications/queries
+CLARIFICATIONS: Full clarification submission details found ANYWHERE in the notice page or any attached document. Scan ALL sections — including those labelled "Queries", "Questions", "Q&A", "Correspondence", "Contact", "Clarifications", "Point of Contact", "How to Participate", headers, footers, and annexes. Extract verbatim: (1) who to contact (name, title, organisation, email), (2) how to submit (email/portal/written letter), (3) deadline for submitting clarifications/queries. List all contacts and methods if multiple are given. Write "Not specified" ONLY if genuinely absent from all provided content.
 PENALTIES: liquidated damages or penalties for delay or non-performance
 
 TENDER CONTENT:

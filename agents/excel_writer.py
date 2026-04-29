@@ -39,7 +39,7 @@ def _write_level1_sheet(ws, record: dict, sourced_on: str):
     r(3,  "Identification", "Published on",              f.get("PUBLISHED_ON", ""),         None,                             a_bold=True, c_bold=True)
     r(4,  None,             "Sourced on",                sourced_on,                        None,                             c_bold=True)
     r(5,  None,             "Pre-bid Meeting",           f.get("PRE_BID_MEETING", "Not specified"))
-    r(6,  None,             "Last date for Submission",  f.get("DEADLINE", ""),             None,                             c_bold=True)
+    r(6,  None,             "Last date for Submission",  f.get("DEADLINE", ""),             f.get("DEADLINE_REMARKS", ""),     c_bold=True)
     # D7 = Reference No. (Remarks for Bid Title row)
     r(7,  None,             "Bid Title",                 f.get("BID_TITLE") or title,       f.get("REFERENCE_NO", ""))
     # D8 = Contact Email (Remarks for Inviting Authority row)
@@ -50,8 +50,8 @@ def _write_level1_sheet(ws, record: dict, sourced_on: str):
     r(12, None,             "Sub Domain",                f.get("SUB_DOMAIN", ""))
     r(13, None,             "TMI Service Line",          f.get("TMI_SERVICE_LINE", ""))
     r(14, None,             "Estimated Project Value",   f.get("PROJECT_VALUE", ""))
-    # D15 = full eligibility details
-    r(15, None,             "Eligibility",               f.get("ELIGIBILITY_FLAG", ""),     f.get("ELIGIBILITY_DETAILS", ""))
+    # C15 left blank — eligibility judgment requires human review; D15 = criteria from documents
+    r(15, None,             "Eligibility",               "",                                f.get("ELIGIBILITY_DETAILS", ""))
     # D16 = dependencies + access/platform requirements combined
     _dep = f.get("DEPENDENCIES", "")
     _acc = f.get("ACCESS_REQUIREMENTS", "")
