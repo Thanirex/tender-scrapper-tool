@@ -95,7 +95,7 @@ playwright install chromium
 Create `.env` in the project root:
 
 ```
-GROQ_API_KEY=gsk_your_key_here
+GEMINI_API_KEY= paste_your_key_here
 ```
 
 ### 4. Configuration files
@@ -173,21 +173,6 @@ All output is saved to `Documents\Tender Scrapping Documents\` in your Windows u
 | `[⚠ MISMATCH: HIGH PRIORITY ERROR]` | Bold red | VERIFIED field contradicts the attached documents — both values quoted |
 
 **Deadline** is always sourced from the `Deadline on` label on the UNGM page (VERIFIED), never inferred by the LLM. If a document states a different date, a MISMATCH flag is raised.
-
----
-
-## Groq free-tier limits
-
-The free tier allows **12 000 tokens / minute (TPM)**.
-
-Current settings to stay within this:
-
-- Input capped at **28 000 characters** per tender (~9 800 content tokens + ~2 200 prompt overhead ≈ 12 000 total)
-- **Auto-retry** up to 3 times with 65-second backoff if rate-limited (hits when multiple tenders are summarised in the same minute)
-
-To raise these limits, upgrade to Groq Dev tier or switch to a local LLM. See `FUTURE_VERSIONS.md` for the full expansion plan.
-
----
 
 ## Project structure
 
