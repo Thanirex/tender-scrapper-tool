@@ -1,5 +1,6 @@
 import os
 import re
+import platform
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
@@ -29,7 +30,16 @@ class UNGMScraperAgent:
         all_results = []
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=headless, slow_mo=0)
+            try:
+                browser = p.chromium.launch(headless=headless, slow_mo=0)
+            except Exception as launch_err:
+                if not headless:
+                    log(f"⚠️ Headed launch failed ({type(launch_err).__name__}: {launch_err!r})")
+                    log("   ↳ Tip: run  playwright install chromium  in your local Python env")
+                    log("   ↳ Falling back to headless mode...")
+                    browser = p.chromium.launch(headless=True, slow_mo=0)
+                else:
+                    raise
             ctx = browser.new_context(accept_downloads=True)
             page = ctx.new_page()
             try:

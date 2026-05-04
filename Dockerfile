@@ -7,6 +7,8 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     x11vnc \
     novnc \
+    websockify \
+    x11-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # pip deps first (layer cached separately from code)

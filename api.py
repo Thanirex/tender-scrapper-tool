@@ -2,6 +2,7 @@ import os
 import re
 import json
 import asyncio
+import platform
 from pathlib import Path
 from datetime import datetime
 
@@ -144,10 +145,10 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     password = credentials.get("password", "")
     show_browser = credentials.get("show_browser", False)
 
-    # Docker / headless-only environments have no X server — force headless silently
-    if show_browser and not os.getenv("DISPLAY"):
+    # DISPLAY is an X11/Linux concept — Windows/Mac launch native Chromium windows without it
+    if show_browser and platform.system() == "Linux" and not os.getenv("DISPLAY"):
         show_browser = False
-        log_cb("⚠️ No display server detected — switching to headless mode.")
+        log_cb("ℹ️ No display server available — running headless.")
 
     if not email or not password:
         log_cb("❌ UNGM email and password are required.")
@@ -253,9 +254,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         websocket.send_json({"type": "error", "message": "No output generated."}), loop
                     )
             except Exception as e:
-                log_cb(f"❌ Fatal: {str(e)}")
+                import traceback
+                err_repr = f"{type(e).__name__}: {e!r}"
+                log_cb(f"❌ Fatal: {err_repr}")
+                for line in traceback.format_exc().strip().splitlines():
+                    if line.strip():
+                        log_cb(f"   {line}")
                 asyncio.run_coroutine_threadsafe(
-                    websocket.send_json({"type": "error", "message": str(e)}), loop
+                    websocket.send_json({"type": "error", "message": err_repr}), loop
                 )
 
         await asyncio.to_thread(run_scrape)
