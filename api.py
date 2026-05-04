@@ -9,11 +9,7 @@ from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from typing import List
-
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill
 from dotenv import load_dotenv
 
 from agents.scraper_agent import ScraperAgent
@@ -62,33 +58,6 @@ async def download_file(file: str):
 
 
 # ── Standard scraper (ngobox / devnet) ──────────────────────────────────────
-
-def _format_excel(excel_path):
-    from openpyxl import load_workbook
-    wb = load_workbook(excel_path)
-    ws = wb.active
-
-    header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="4F81BD")
-    align_center = Alignment(horizontal="center", vertical="center")
-    align_wrap = Alignment(wrap_text=True, vertical="top")
-
-    for cell in ws[1]:
-        cell.font = header_font
-        cell.fill = header_fill
-        cell.alignment = align_center
-
-    ws.column_dimensions["A"].width = 6
-    ws.column_dimensions["B"].width = 15
-    ws.column_dimensions["C"].width = 20
-    ws.column_dimensions["D"].width = 40
-    ws.column_dimensions["E"].width = 80
-
-    for row in range(2, ws.max_row + 1):
-        ws.cell(row=row, column=5).alignment = align_wrap
-
-    wb.save(excel_path)
-
 
 def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
     from agents.excel_writer import write_level1_report
@@ -145,7 +114,9 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     password = credentials.get("password", "")
     show_browser = credentials.get("show_browser", False)
 
-    # DISPLAY is an X11/Linux concept — Windows/Mac launch native Chromium windows without it
+    # On Linux/Docker, DISPLAY must point to a real X server.
+    # entrypoint.sh sets it to host.docker.internal:0.0 (VcXsrv) or falls back to :99 (Xvfb/noVNC).
+    # On Windows/Mac, Playwright opens native windows without DISPLAY.
     if show_browser and platform.system() == "Linux" and not os.getenv("DISPLAY"):
         show_browser = False
         log_cb("ℹ️ No display server available — running headless.")

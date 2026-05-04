@@ -8,7 +8,5 @@ __pycache__/
 data/
 *.xlsx
 *.docx
-test_search.html
-Website link.txt
 FUTURE_VERSIONS.md
 uv.lock

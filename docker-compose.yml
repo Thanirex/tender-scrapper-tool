@@ -3,15 +3,10 @@ services:
     build: .
     ports:
       - "8000:8000"
-      - "6080:6080"
     env_file:
       - .env
     environment:
       - TENDER_DATA_DIR=/data
-      - DISPLAY=:99
     volumes:
-      - tender_data:/data
+      - "~/Documents/Tender Scrapping Documents:/data"
     restart: unless-stopped
-
-volumes:
-  tender_data:
