@@ -1,0 +1,16 @@
+services:
+  tender-scrapper:
+    build: .
+    ports:
+      - "8000:8000"
+      - "6080:6080"
+    env_file:
+      - .env
+    environment:
+      - TENDER_DATA_DIR=/data
+    volumes:
+      - tender_data:/data
+    restart: unless-stopped
+
+volumes:
+  tender_data:

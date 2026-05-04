@@ -1,10 +1,13 @@
+import os
 from pathlib import Path
 
 # Directory that contains api.py, static/, agents/, etc.
 APP_DIR = Path(__file__).parent
 
-# All user data goes here — survives app moves or reinstalls
-DATA_DIR = Path.home() / "Documents" / "Tender Scrapping Documents"
+# TENDER_DATA_DIR env var lets Docker (or CI) redirect data to a mounted volume.
+# Falls back to the original Windows user-documents path for local installs.
+_data_root = os.getenv("TENDER_DATA_DIR")
+DATA_DIR = Path(_data_root) if _data_root else Path.home() / "Documents" / "Tender Scrapping Documents"
 OUTPUTS_DIR  = DATA_DIR / "outputs"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
 

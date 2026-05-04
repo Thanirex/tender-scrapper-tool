@@ -144,6 +144,11 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     password = credentials.get("password", "")
     show_browser = credentials.get("show_browser", False)
 
+    # Docker / headless-only environments have no X server — force headless silently
+    if show_browser and not os.getenv("DISPLAY"):
+        show_browser = False
+        log_cb("⚠️ No display server detected — switching to headless mode.")
+
     if not email or not password:
         log_cb("❌ UNGM email and password are required.")
         return None
