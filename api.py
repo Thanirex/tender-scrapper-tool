@@ -3,12 +3,13 @@ import re
 import json
 import asyncio
 import platform
+import zipfile
 from pathlib import Path
 from datetime import datetime
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from openpyxl import Workbook
 from dotenv import load_dotenv
 
@@ -16,7 +17,6 @@ from agents.scraper_agent import ScraperAgent
 from agents.summarizer_agent import SummarizerAgent
 from paths import APP_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, init as _init_paths
 
-# Load .env from the app directory so double-click launch works regardless of cwd
 load_dotenv(APP_DIR / ".env")
 
 _init_paths()
@@ -45,30 +45,47 @@ async def get_config():
 
 
 @app.get("/download")
-async def download_file(file: str):
-    if not os.path.exists(file):
-        return {"error": "File not found"}
-    ext = Path(file).suffix.lower()
+async def download_file(name: str):
+    file_path = (OUTPUTS_DIR / name).resolve()
+    # Prevent path traversal — only serve files inside OUTPUTS_DIR
+    if not file_path.is_relative_to(OUTPUTS_DIR.resolve()):
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+    if not file_path.exists() or not file_path.is_file():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    ext = file_path.suffix.lower()
     mime_map = {
         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".zip":  "application/zip",
     }
     media_type = mime_map.get(ext, "application/octet-stream")
-    return FileResponse(file, media_type=media_type, filename=os.path.basename(file))
+    return FileResponse(str(file_path), media_type=media_type, filename=name)
+
+
+def _make_run_zip(dirs: list[Path], base: Path, zip_stem: str) -> Path:
+    """Zip all files under each dir (relative to base) into OUTPUTS_DIR/{zip_stem}.zip."""
+    zip_path = OUTPUTS_DIR / f"{zip_stem}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for src in dirs:
+            if not src.is_dir():
+                continue
+            for fpath in src.rglob("*"):
+                if fpath.is_file():
+                    zf.write(fpath, fpath.relative_to(base))
+    return zip_path
 
 
 # ── Standard scraper (ngobox / devnet) ──────────────────────────────────────
 
-def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
+def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> list[Path] | None:
     from agents.excel_writer import write_level1_report
     agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
     summarizer = SummarizerAgent()
 
-    excel_paths = []
+    tender_dirs: list[Path] = []
     log_cb("🚀 Starting Agentic Scraper...")
 
     def make_callback(kw):
-        """Return a per-keyword callback that fires immediately after each result is scraped."""
         def on_result_ready(res):
             title = res.get("title", "Unknown")
             log_cb(f"📊 Summarizing: {title[:55]}...")
@@ -85,27 +102,25 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> str | None:
             safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
             excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
             write_level1_report([record], excel_path)
-            excel_paths.append(excel_path)
+            tender_dirs.append(tender_dir)
             log_cb(f"✅ Saved: {excel_path}")
         return on_result_ready
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
-        # Pass callback into search() so it fires during the browser session,
-        # immediately after each result is downloaded — not after all are done.
         agent.search(site_key, kw, log_callback=log_cb, on_result_ready=make_callback(kw))
 
-    if not excel_paths:
+    if not tender_dirs:
         log_cb("⚠️ No results found.")
         return None
 
-    log_cb(f"✅ Done. {len(excel_paths)} Level 1 Excel(s) saved.")
-    return excel_paths[0]
+    log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
+    return tender_dirs
 
 
 # ── UNGM scraper ─────────────────────────────────────────────────────────────
 
-def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
+def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> Path | None:
     from agents.ungm_scraper_agent import UNGMScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -114,9 +129,6 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
     password = credentials.get("password", "")
     show_browser = credentials.get("show_browser", False)
 
-    # On Linux/Docker, DISPLAY must point to a real X server.
-    # entrypoint.sh sets it to host.docker.internal:0.0 (VcXsrv) or falls back to :99 (Xvfb/noVNC).
-    # On Windows/Mac, Playwright opens native windows without DISPLAY.
     if show_browser and platform.system() == "Linux" and not os.getenv("DISPLAY"):
         show_browser = False
         log_cb("ℹ️ No display server available — running headless.")
@@ -126,13 +138,12 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
         return None
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = str(DOWNLOADS_DIR / "ungm" / timestamp)
+    run_dir = DOWNLOADS_DIR / "ungm" / timestamp
 
     summarizer = SummarizerAgent()
     excel_paths = []
 
     def on_tender_ready(res):
-        """Fires immediately after each tender is downloaded — summarise and save Excel now."""
         title = res["title"]
         log_cb(f"📊 Summarizing: {title[:55]}...")
 
@@ -166,8 +177,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
             "files": res.get("files", []),
         }
 
-        # Save Excel inside the tender's own folder — alongside the downloaded PDFs
-        tender_dir = Path(res.get("tender_dir", run_dir))
+        tender_dir = Path(res.get("tender_dir", str(run_dir)))
         safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
         excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
         write_level1_report([record], excel_path)
@@ -179,7 +189,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
         log_cb("👁️ Live browser mode enabled — watch Chromium on your screen.")
 
     agent = UNGMScraperAgent()
-    agent.scrape(email, password, keywords, run_dir,
+    agent.scrape(email, password, keywords, str(run_dir),
                  headless=not show_browser, log_callback=log_cb,
                  on_tender_ready=on_tender_ready)
 
@@ -188,7 +198,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> str | None:
         return None
 
     log_cb(f"✅ Done. {len(excel_paths)} Level 1 Excel(s) saved in: {run_dir}")
-    return excel_paths[0]
+    return run_dir
 
 
 # ── WebSocket endpoint ────────────────────────────────────────────────────────
@@ -211,14 +221,23 @@ async def websocket_endpoint(websocket: WebSocket):
 
         def run_scrape():
             try:
-                if site_key == "ungm":
-                    output_path = _run_ungm_scrape(keywords, credentials, log_cb)
-                else:
-                    output_path = _run_standard_scrape(site_key, keywords, log_cb)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-                if output_path:
+                if site_key == "ungm":
+                    result = _run_ungm_scrape(keywords, credentials, log_cb)
+                    if result:
+                        log_cb("📦 Packaging all results into ZIP...")
+                        zip_path = _make_run_zip([result], result, f"UNGM_{ts}")
+                else:
+                    result = _run_standard_scrape(site_key, keywords, log_cb)
+                    if result:
+                        log_cb("📦 Packaging all results into ZIP...")
+                        base = DOWNLOADS_DIR / site_key
+                        zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
+
+                if result and zip_path.exists():
                     asyncio.run_coroutine_threadsafe(
-                        websocket.send_json({"type": "complete", "file": output_path}), loop
+                        websocket.send_json({"type": "complete", "zip": zip_path.name}), loop
                     )
                 else:
                     asyncio.run_coroutine_threadsafe(

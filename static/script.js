@@ -150,10 +150,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusBadge.className = 'badge completed';
                 statusBadge.textContent = 'Completed';
                 downloadArea.classList.remove('hidden');
-                downloadBtn.href = `/download?file=${encodeURIComponent(data.file)}`;
-                downloadBtn.textContent = data.file.endsWith('.docx')
-                    ? '📥 Download Word Report'
-                    : '📥 Download Excel Report';
+                downloadBtn.href = `/download?name=${encodeURIComponent(data.zip)}`;
+                downloadBtn.textContent = '📥 Download All Results (ZIP)';
                 finishRun();
             } else if (data.type === 'error') {
                 statusBadge.className = 'badge failed';
