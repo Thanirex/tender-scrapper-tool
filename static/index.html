@@ -89,12 +89,15 @@
                                         <option value="custom" selected>Custom (Type above)</option>
                                     </select>
                                 </div>
-                                <label class="toggle-row mt-2" id="browser-toggle-row">
-                                    <input type="checkbox" id="ungm-show-browser">
-                                    <span class="toggle-label">Show live browser on screen (Linux only)</span>
-                                </label>
                             </div>
                         </details>
+                        
+                        <div class="mt-4">
+                            <label class="toggle-row" id="browser-toggle-row">
+                                <input type="checkbox" id="ungm-show-browser" name="show_browser" checked>
+                                <span class="toggle-label">🔍 Show live browser on screen (Watch the scraper work!)</span>
+                            </label>
+                        </div>
                     </div>
                 </div>
 
@@ -202,6 +205,17 @@
             </div>
             <p class="results-summary" id="results-summary"></p>
             <div class="results-grid" id="results-grid"></div>
+        </div>
+
+        </div>
+
+        <!-- LOGS SLIDER BAR -->
+        <div class="logs-bar" id="logs-bar">
+            <div class="logs-header" id="logs-header">
+                <span>Show Logs</span>
+                <span class="logs-toggle-icon">▲</span>
+            </div>
+            <div class="logs-content" id="logs-content"></div>
         </div>
 
     </div>

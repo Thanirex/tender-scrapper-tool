@@ -261,6 +261,172 @@ class UNGMScraperAgent:
             tender_dir = Path(run_dir) / safe_kw / safe_title
             tender_dir.mkdir(parents=True, exist_ok=True)
 
+            downloaded = []
+
+            # Check for Quantum links
+            try:
+                # UNGM sometimes hides links under a tab. Let's try to click the Links tab if it exists.
+                try:
+                    # Look for tabs containing "Links"
+                    links_tabs = notice_page.locator("a, button, span").filter(has_text=re.compile(r"^Links$", re.IGNORECASE)).all()
+                    for tab in links_tabs:
+                        if tab.is_visible():
+                            tab.click()
+                            notice_page.wait_for_timeout(1500)
+                            break
+                except Exception as e:
+                    pass
+                
+                # Extract URLs
+                token_url = None
+                quantum_url = None
+
+                # Method 1: Look at table rows directly (UNGM typically uses this structure for Links)
+                try:
+                    for row in notice_page.locator("table tr").all():
+                        try:
+                            # all_inner_texts() on td returns a list of text contents for each cell
+                            cells = row.locator("td").all_inner_texts()
+                            if len(cells) >= 2:
+                                url_text = cells[0].strip()
+                                desc_text = cells[1].strip().lower()
+                                
+                                if url_text.startswith("http"):
+                                    if "click on this link before accessing" in desc_text:
+                                        token_url = url_text
+                                    elif not quantum_url and "negotiation document" in desc_text:
+                                        # Use 'not quantum_url' to grab the first match and ignore 'Direct link to Quantum...'
+                                        quantum_url = url_text
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
+
+                # Method 2: Fallback to evaluating JS for 'a' tags if the table structure didn't match
+                if not token_url or not quantum_url:
+                    links_data = notice_page.evaluate("""() => {
+                        return Array.from(document.querySelectorAll('a')).map(a => {
+                            let parent = a.closest('tr') || a.closest('div.row') || a.parentElement;
+                            return {
+                                href: a.href || '',
+                                text: a.textContent.trim(),
+                                parentText: parent ? parent.textContent.trim() : ''
+                            };
+                        });
+                    }""")
+                    
+                    for l in links_data:
+                        a_text = l["text"].lower()
+                        p_text = l["parentText"].lower()
+                        
+                        if "go to link" in a_text or "direct link" in a_text or "direct link" in p_text:
+                            if not token_url and "click on this link before accessing" in p_text:
+                                token_url = l["href"]
+                            elif not quantum_url and "negotiation document" in p_text:
+                                quantum_url = l["href"]
+                
+                if token_url and quantum_url:
+                    log("      🔑 Found Quantum token and negotiation links. Processing Quantum flow...")
+                    
+                    # 1. Open token URL
+                    token_page = ctx.new_page()
+                    try:
+                        token_page.goto(token_url, wait_until="domcontentloaded", timeout=60000)
+                        # Wait for the document ID to appear (e.g. UNDPPUBDOCS-)
+                        doc_link = token_page.locator("a:has-text('UNDPPUBDOCS-')").first
+                        try:
+                            doc_link.wait_for(state="visible", timeout=30000)
+                            
+                            # Clicking it opens a new tab
+                            with ctx.expect_page() as new_page_info:
+                                doc_link.click()
+                            security_page = new_page_info.value
+                            security_page.wait_for_load_state("domcontentloaded")
+                            security_page.wait_for_timeout(3000)  # Wait for token to register
+                            security_page.close()
+                            log("      ✅ Security token acquired")
+                        except Exception as e:
+                            log(f"      ⚠️ Failed to acquire security token: {e}")
+                    except Exception as e:
+                        log(f"      ⚠️ Error in token page: {e}")
+                    finally:
+                        token_page.close()
+                        
+                    # 2. Open Quantum Negotiation link
+                    quantum_page = ctx.new_page()
+                    try:
+                        quantum_page.goto(quantum_url, wait_until="domcontentloaded", timeout=60000)
+                        quantum_page.wait_for_timeout(5000)  # Wait for SharePoint/Oracle to load
+                        
+                        # Select all documents
+                        try:
+                            # Attempt 1: SharePoint supports Ctrl+A to select all items
+                            quantum_page.keyboard.press("Control+a")
+                            quantum_page.wait_for_timeout(1000)
+                            
+                            download_btn = quantum_page.locator("button[name='Download'], [data-automationid='downloadCommand'], button:has-text('Download'), a:has-text('Download')").first
+                            
+                            # Attempt 2: Click the 'Select All' header checkbox
+                            if not download_btn.is_visible():
+                                select_all_header = quantum_page.locator("div[data-automationid='toggleSelection'], [aria-label*='Toggle selection' i], [aria-label*='Select all' i]").first
+                                if select_all_header.is_visible():
+                                    select_all_header.click()
+                                    log("      ☑️ Clicked 'Select All' header")
+                                    quantum_page.wait_for_timeout(1000)
+
+                            # Attempt 3: Hover each row to reveal the hidden 'check_' box and click it
+                            if not download_btn.is_visible():
+                                rows = quantum_page.locator("div[data-automationid='DetailsRow'], .ms-DetailsRow, [role='row']").all()
+                                clicked_count = 0
+                                for row in rows:
+                                    if row.is_visible() and "header" not in row.get_attribute("class").lower():
+                                        try:
+                                            # Hovering reveals the check circle
+                                            row.hover()
+                                            quantum_page.wait_for_timeout(150)
+                                            # Look for check element or left-most selection column
+                                            check_btn = row.locator("[class*='check_'], [role='checkbox'], i[data-icon-name='CircleRing'], .ms-DetailsRow-check").first
+                                            if check_btn.is_visible():
+                                                check_btn.click()
+                                                clicked_count += 1
+                                            else:
+                                                # Click the extreme left edge of the row as fallback
+                                                row.click(position={"x": 5, "y": 10})
+                                                clicked_count += 1
+                                        except Exception:
+                                            pass
+                                log(f"      ☑️ Hovered and clicked {clicked_count} row checkboxes")
+                                
+                            quantum_page.wait_for_timeout(1500)
+                        except Exception as e:
+                            log(f"      ⚠️ Error selecting documents: {e}")
+                            
+                        # Then click Download
+                        try:
+                            download_btn.wait_for(state="visible", timeout=15000)
+                            
+                            with quantum_page.expect_download(timeout=120000) as dl_info:
+                                download_btn.click()
+                            
+                            dl = dl_info.value
+                            fname = dl.suggested_filename or "quantum_documents.zip"
+                            stem = Path(fname).stem[:55]
+                            ext  = Path(fname).suffix[:10]
+                            safe_fname = re.sub(r'[\\/*?:"<>|]', "_", stem) + ext
+                            out_path = tender_dir / safe_fname
+                            dl.save_as(str(out_path))
+                            downloaded.append(str(out_path))
+                            log(f"      💾 Quantum Documents downloaded: {safe_fname}")
+                        except Exception as e:
+                            log(f"      ⚠️ Error downloading Quantum documents: {e}")
+                            
+                    except Exception as e:
+                        log(f"      ⚠️ Error in Quantum negotiation page: {e}")
+                    finally:
+                        quantum_page.close()
+            except Exception as e:
+                log(f"      ⚠️ Error processing Quantum links: {e}")
+
             # Collect all download hrefs before clicking any
             att_hrefs = []
             try:
@@ -277,7 +443,6 @@ class UNGMScraperAgent:
                 log(f"      📎 {len(att_hrefs)} attachment(s) found")
 
             # Download each attachment in its own tab
-            downloaded = []
             for att_href in att_hrefs:
                 dl_page = None
                 try:
@@ -306,6 +471,36 @@ class UNGMScraperAgent:
                             dl_page.close()
                         except Exception:
                             pass
+
+            # --- Extract all ZIP files recursively ---
+            try:
+                import zipfile
+                while True:
+                    zip_files = list(tender_dir.rglob("*.zip"))
+                    if not zip_files:
+                        break
+                    extracted_any = False
+                    for zf in zip_files:
+                        try:
+                            with zipfile.ZipFile(zf, 'r') as zip_ref:
+                                zip_ref.extractall(tender_dir)
+                                log(f"      📦 Extracted zip: {zf.name}")
+                            zf.unlink()  # Delete the zip file
+                            extracted_any = True
+                        except Exception as e:
+                            log(f"      ⚠️ Error extracting {zf.name}: {e}")
+                            try:
+                                zf.unlink()  # Delete broken zip to prevent infinite loop
+                            except Exception:
+                                pass
+                            
+                    if not extracted_any:
+                        break
+                        
+                # Update downloaded list to reflect extracted files
+                downloaded = [str(f) for f in tender_dir.rglob("*") if f.is_file() and f.name != "page_content.txt"]
+            except Exception as e:
+                log(f"      ⚠️ Error during unzip process: {e}")
 
             # Always save page text to disk for archiving.
             # Only add to `files` when there are no other attachments — api.py already sends

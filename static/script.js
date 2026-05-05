@@ -33,6 +33,26 @@ document.addEventListener('DOMContentLoaded', () => {
     // Thought stream
     const thoughtStream = document.getElementById('thought-stream');
 
+    // Logs Slider
+    const logsBar = document.getElementById('logs-bar');
+    const logsHeader = document.getElementById('logs-header');
+    const logsContent = document.getElementById('logs-content');
+
+    if (logsHeader) {
+        logsHeader.addEventListener('click', () => {
+            logsBar.classList.toggle('expanded');
+        });
+    }
+
+    function appendLog(rawMsg) {
+        if (!logsContent) return;
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.textContent = rawMsg;
+        logsContent.appendChild(line);
+        logsContent.scrollTop = logsContent.scrollHeight;
+    }
+
     let serverKeywords  = {};
     let foundCount      = 0;
     let allResults      = [];
@@ -315,6 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
         keywordCountMap = {};
         stepGoneTimers  = {};
         if (thoughtStream) thoughtStream.innerHTML = '';
+        if (logsContent) logsContent.innerHTML = '';
 
         // Reset tracker steps
         ['connecting', 'login', 'searching', 'extracting'].forEach(id => {
@@ -363,6 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (msg.type === 'log') {
                 const raw = msg.message;
                 const friendly = toFriendlyMsg(raw);
+                appendLog(raw);
 
                 if (raw.includes('Opening UNGM login') || raw.includes('Opening login') ||
                     raw.includes('Logged in') || raw.includes('Active-only filter')) {
