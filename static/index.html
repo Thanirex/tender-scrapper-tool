@@ -3,91 +3,209 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tender Scrapper - Pro</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=9">
+    <title>TAiQ - Find Opportunities</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=14">
 </head>
 <body>
-    <div class="top-bar">
-        <div class="top-bar-left">TAiQ</div>
-        <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.src='https://via.placeholder.com/150x50?text=CNK+Logo'">
+    <div class="app-background"></div>
+
+    <!-- Floating Notification Bar -->
+    <div class="notif-bar hidden" id="notif-bar">
+        <span class="notif-pulse-dot"></span>
+        <span>🔍</span>
+        <span class="notif-keyword" id="notif-keyword">"keyword"</span>
+        <span class="notif-sep">·</span>
+        <span class="notif-count-badge" id="notif-count-val">0</span>
+        <span class="notif-label">found</span>
     </div>
-    
-    <div class="background-blobs">
-        <div class="blob blob-1"></div>
-        <div class="blob blob-2"></div>
-    </div>
-    
-    <div class="container">
-        <header>
-            <h1>Tender AiQ (TAiQ)</h1>
+
+    <nav class="top-nav">
+        <div class="logo">TAiQ</div>
+        <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+    </nav>
+
+    <div class="main-layout">
+        <header class="page-header">
+            <h1>Find Opportunities</h1>
             <p>Smart tender analysis powered by AI and automation</p>
         </header>
 
-        <div class="main-content">
-            <aside class="controls glass-panel">
-                <div class="input-group">
-                    <label for="site-select"><span class="step-badge">1</span> Target Website</label>
-                    <select id="site-select">
-                        <option value="" disabled selected>Loading...</option>
-                    </select>
+        <div class="content-grid">
+            <!-- LEFT COLUMN: WIZARD -->
+            <div class="wizard-panel">
+                <div class="wizard-progress-bar">
+                    <div class="wizard-progress-fill" id="wizard-progress-fill"></div>
+                </div>
+                <div class="wizard-steps-indicator" id="wizard-indicators">
+                    <div class="indicator active">1</div>
+                    <div class="indicator line"></div>
+                    <div class="indicator">2</div>
+                    <div class="indicator line"></div>
+                    <div class="indicator">3</div>
                 </div>
 
-                <div id="ungm-credentials" class="ungm-cred-panel hidden">
-                    <div class="cred-header">
-                        <span class="lock-icon">🔒</span>
-                        <span>UNGM Login</span>
+                <div class="wizard-content-wrapper">
+                    <div class="wizard-step active" id="wizard-step-1">
+                        <h2>Select Platform</h2>
+                        <p class="step-desc">Where would you like to search for opportunities?</p>
+                        <div class="input-group mt-4">
+                            <label>Target Website</label>
+                            <select id="site-select" class="large-input">
+                                <option value="" disabled selected>Loading...</option>
+                            </select>
+                        </div>
                     </div>
-                    <p class="cred-note">Credentials are used only for this session and never stored.</p>
-                    <div class="input-group" style="margin-bottom:0.75rem;">
-                        <label for="ungm-email">Email</label>
-                        <input type="email" id="ungm-email" placeholder="your@email.com" autocomplete="email">
+
+                    <div class="wizard-step" id="wizard-step-2">
+                        <h2>Authentication</h2>
+                        <p class="step-desc">Securely connect to your UNGM account.</p>
+                        <div class="alert-info mt-2">
+                            <span class="icon">🔒</span> Credentials are used only for this session and never stored.
+                        </div>
+                        <div class="input-group mt-4">
+                            <label>Email Address</label>
+                            <input type="email" id="ungm-email" class="large-input" placeholder="e.g. user@organization.com">
+                        </div>
+                        <div class="input-group mt-4">
+                            <label>Password</label>
+                            <input type="password" id="ungm-password" class="large-input" placeholder="••••••••">
+                        </div>
                     </div>
-                    <div class="input-group" style="margin-bottom:0.75rem;">
-                        <label for="ungm-password">Password</label>
-                        <input type="password" id="ungm-password" placeholder="••••••••" autocomplete="current-password">
+
+                    <div class="wizard-step" id="wizard-step-3">
+                        <h2>Define Criteria</h2>
+                        <p class="step-desc">What kind of tenders are you looking for?</p>
+                        <div class="input-group mt-4">
+                            <label>Keywords (Comma separated)</label>
+                            <textarea id="keywords-input" class="large-input" placeholder="e.g. Simulation, AI, Data Analysis..." rows="3"></textarea>
+                        </div>
+                        <details class="advanced-settings mt-4">
+                            <summary>Advanced Settings (Optional)</summary>
+                            <div class="advanced-content">
+                                <div class="input-group">
+                                    <label>Predefined Category</label>
+                                    <select id="category-select" class="large-input">
+                                        <option value="custom" selected>Custom (Type above)</option>
+                                    </select>
+                                </div>
+                                <label class="toggle-row mt-2" id="browser-toggle-row">
+                                    <input type="checkbox" id="ungm-show-browser">
+                                    <span class="toggle-label">Show live browser on screen (Linux only)</span>
+                                </label>
+                            </div>
+                        </details>
                     </div>
-                    <label class="toggle-row">
-                        <input type="checkbox" id="ungm-show-browser">
-                        <span class="toggle-label">Show live browser on screen</span>
-                    </label>
                 </div>
 
-                <div class="input-group">
-                    <label><span class="step-badge">2</span> Select Category</label>
-                    <select id="category-select">
-                        <option value="" disabled selected>Loading categories...</option>
-                    </select>
+                <div class="wizard-footer">
+                    <button id="btn-prev" class="secondary-btn hidden">Back</button>
+                    <div class="spacer"></div>
+                    <button id="btn-next" class="primary-btn">Next Step <span>→</span></button>
+                    <button id="btn-start" class="primary-btn hidden">Start Extraction <span>🚀</span></button>
+                </div>
+            </div>
+
+            <!-- RIGHT COLUMN: STATUS -->
+            <div class="status-panel">
+
+                <!-- IDLE STATE -->
+                <div id="state-idle" class="state-container active">
+                    <div class="empty-state">
+                        <div class="empty-icon">🔍</div>
+                        <h3>Ready to Search</h3>
+                        <p>Complete the setup on the left to start finding opportunities.</p>
+                    </div>
                 </div>
 
-                <div class="input-group">
-                    <label><span class="step-badge">3</span> Keywords (Comma separated)</label>
-                    <textarea id="keywords-input" placeholder="e.g. Digital Education, eLearning..." rows="4"></textarea>
+                <!-- RUNNING STATE -->
+                <div id="state-running" class="state-container">
+                    <div class="panel-header">
+                        <h2>TAiQ at Work</h2>
+                        <span id="status-badge" class="status-badge pulse">Running</span>
+                    </div>
+
+                    <div class="progress-tracker mt-4" id="progress-tracker">
+                        <div class="tracker-step" id="step-connecting">
+                            <div class="tracker-icon"></div>
+                            <div class="tracker-content">
+                                <h4>Connecting</h4>
+                                <p id="desc-connecting">Establishing secure connection</p>
+                            </div>
+                        </div>
+                        <div class="tracker-step" id="step-login">
+                            <div class="tracker-icon"></div>
+                            <div class="tracker-content">
+                                <h4>Logging In</h4>
+                                <p id="desc-login">Authenticating credentials</p>
+                            </div>
+                        </div>
+                        <div class="tracker-step" id="step-searching">
+                            <div class="tracker-icon"></div>
+                            <div class="tracker-content">
+                                <h4>Searching</h4>
+                                <p id="desc-searching">Scanning platform for keywords</p>
+                                <div class="keyword-pill hidden" id="keyword-pill">
+                                    <span class="kp-live-dot"></span>
+                                    <span id="keyword-pill-text">keyword</span>
+                                </div>
+                                <div class="scan-dots hidden" id="scan-dots">
+                                    <span></span><span></span><span></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="tracker-step" id="step-extracting">
+                            <div class="tracker-icon"></div>
+                            <div class="tracker-content">
+                                <h4>Extracting &amp; Summarising</h4>
+                                <p id="desc-extracting">TAiQ is summarising opportunities</p>
+                                <div class="robot-container hidden" id="robot-container">
+                                    <div class="robot-face">🤖</div>
+                                    <span class="robot-thinking">TAiQ is on it…</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Thought bubble stream -->
+                    <div class="thought-stream" id="thought-stream"></div>
                 </div>
 
-                <div class="input-group" style="margin-top: 1rem;">
-                    <button id="start-btn" class="primary-btn">
-                        <span class="btn-text">Start Scraping</span>
-                        <div class="loader hidden"></div>
-                    </button>
+                <!-- DONE STATE -->
+                <div id="state-done" class="state-container">
+                    <div class="done-state">
+                        <div class="done-check-wrapper">
+                            <svg class="done-checkmark" viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg">
+                                <circle class="done-circle" cx="26" cy="26" r="24"/>
+                                <path class="done-check" d="M14 26.5l8 8 16-17.5"/>
+                            </svg>
+                        </div>
+                        <h3>Analysis Complete</h3>
+                        <p id="done-summary">TAiQ has finished scanning.</p>
+                    </div>
                 </div>
-            </aside>
 
-            <section class="live-feed glass-panel">
-                <div class="feed-header">
-                    <h2>Live Terminal</h2>
-                    <span id="status-badge" class="badge idle">Idle</span>
-                </div>
-                <div class="terminal" id="terminal">
-                    <div class="log-line system"><span class="timestamp">[00:00:00]</span><span class="prefix">[SYSTEM]</span><span> Ready to launch...</span></div>
-                </div>
-                <div id="download-area" class="download-area hidden">
-                    <a id="download-btn" href="#" class="success-btn" download>📥 Download All Results (ZIP)</a>
-                </div>
-            </section>
+            </div>
         </div>
+
+        <!-- RESULTS SECTION — full width, below the two panels -->
+        <div class="results-section hidden" id="results-section">
+            <div class="results-section-header">
+                <div class="results-title-block">
+                    <h2>Opportunities Found</h2>
+                    <span class="status-badge success" id="results-count">0 Found</span>
+                </div>
+                <a id="download-btn" href="#" class="download-btn" download>
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Download All (ZIP)
+                </a>
+            </div>
+            <p class="results-summary" id="results-summary"></p>
+            <div class="results-grid" id="results-grid"></div>
+        </div>
+
     </div>
 
-    <script src="/static/script.js?v=2"></script>
+    <script src="/static/script.js?v=7"></script>
 </body>
 </html>

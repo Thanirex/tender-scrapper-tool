@@ -77,7 +77,7 @@ def _make_run_zip(dirs: list[Path], base: Path, zip_stem: str) -> Path:
 
 # ── Standard scraper (ngobox / devnet) ──────────────────────────────────────
 
-def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> list[Path] | None:
+def _run_standard_scrape(site_key: str, keywords: list, log_cb, result_cb=None) -> list[Path] | None:
     from agents.excel_writer import write_level1_report
     agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
     summarizer = SummarizerAgent()
@@ -103,6 +103,8 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> list[Path] | 
             excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
             write_level1_report([record], excel_path)
             tender_dirs.append(tender_dir)
+            if result_cb:
+                result_cb(record)
             log_cb(f"✅ Saved: {excel_path}")
         return on_result_ready
 
@@ -120,7 +122,7 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb) -> list[Path] | 
 
 # ── UNGM scraper ─────────────────────────────────────────────────────────────
 
-def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> Path | None:
+def _run_ungm_scrape(keywords: list, credentials: dict, log_cb, result_cb=None) -> Path | None:
     from agents.ungm_scraper_agent import UNGMScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -182,6 +184,8 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb) -> Path | None:
         excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
         write_level1_report([record], excel_path)
         excel_paths.append(excel_path)
+        if result_cb:
+            result_cb(record)
         log_cb(f"✅ Saved: {excel_path}")
 
     log_cb("🚀 Starting UNGM Agentic Scraper...")
@@ -219,17 +223,29 @@ async def websocket_endpoint(websocket: WebSocket):
                 websocket.send_json({"type": "log", "message": msg}), loop
             )
 
+        def result_cb(record):
+            payload = {
+                "keyword": record.get("keyword", ""),
+                "title":   record.get("title", "Unknown"),
+                "url":     record.get("url", ""),
+                "site":    record.get("site", ""),
+                "fields":  {k: str(v) for k, v in (record.get("fields") or {}).items()},
+            }
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "result", "data": payload}), loop
+            )
+
         def run_scrape():
             try:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
                 if site_key == "ungm":
-                    result = _run_ungm_scrape(keywords, credentials, log_cb)
+                    result = _run_ungm_scrape(keywords, credentials, log_cb, result_cb)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         zip_path = _make_run_zip([result], result, f"UNGM_{ts}")
                 else:
-                    result = _run_standard_scrape(site_key, keywords, log_cb)
+                    result = _run_standard_scrape(site_key, keywords, log_cb, result_cb)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
