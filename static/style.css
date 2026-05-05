@@ -1,7 +1,7 @@
 :root {
-    --primary: #1565c0;
-    --primary-hover: #0d47a1;
-    --primary-light: #e3f2fd;
+    --primary: #27272a;
+    --primary-hover: #18181b;
+    --primary-light: #f4f4f5;
 
     --bg-color: #f8fafc;
     --surface: #ffffff;
@@ -48,7 +48,7 @@ body {
     width: 70vw;
     height: 70vw;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(21,101,192,0.04) 0%, rgba(248,250,252,0) 70%);
+    background: radial-gradient(circle, rgba(39,39,42,0.04) 0%, rgba(248,250,252,0) 70%);
     z-index: -1;
     pointer-events: none;
 }
@@ -523,9 +523,9 @@ details.advanced-settings summary {
 }
 
 @keyframes badgePulse {
-    0%   { box-shadow: 0 0 0 0 rgba(21,101,192,0.4); }
-    70%  { box-shadow: 0 0 0 7px rgba(21,101,192,0); }
-    100% { box-shadow: 0 0 0 0 rgba(21,101,192,0); }
+    0%   { box-shadow: 0 0 0 0 rgba(39,39,42,0.4); }
+    70%  { box-shadow: 0 0 0 7px rgba(39,39,42,0); }
+    100% { box-shadow: 0 0 0 0 rgba(39,39,42,0); }
 }
 
 /* =============================================
@@ -627,7 +627,7 @@ details.advanced-settings summary {
     font-size: 0.8rem;
     font-weight: 600;
     margin-top: 0.65rem;
-    box-shadow: 0 3px 12px rgba(30,64,175,0.3);
+    box-shadow: 0 3px 12px rgba(39,39,42,0.3);
 }
 
 .keyword-pill.pill-enter {
@@ -692,7 +692,7 @@ details.advanced-settings summary {
 .robot-face {
     font-size: 2rem;
     animation: robotFloat 2.2s ease-in-out infinite;
-    filter: drop-shadow(0 3px 8px rgba(30,64,175,0.25));
+    filter: drop-shadow(0 3px 8px rgba(39,39,42,0.25));
     line-height: 1;
 }
 
