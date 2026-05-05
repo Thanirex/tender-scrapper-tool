@@ -58,6 +58,18 @@ class ScraperAgent:
                         links[i].click()
                         page.wait_for_load_state("networkidle")
                         current_url = page.url
+                        
+                        # Fix for DevNet: The page URL stays the same due to AJAX postback. 
+                        # We extract the true permalink from the form action.
+                        if "devnetjobs" in current_url.lower():
+                            try:
+                                form_action = page.locator("form").first.get_attribute("action")
+                                if form_action and "job_id=" in form_action:
+                                    # form_action looks like "./jobdescription.aspx?job_id=123"
+                                    clean_path = form_action.lstrip("./")
+                                    current_url = f"https://devnetjobsindia.org/{clean_path}"
+                            except:
+                                pass
 
                         try:
                             title = page.locator(site['tender_title_selector']).first.text_content().strip()

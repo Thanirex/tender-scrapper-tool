@@ -3,9 +3,9 @@
         "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
         "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
         "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
-        "results_link_selector": "#ContentPlaceHolder1_SearchView1_grdJobs a",
+        "results_link_selector": "a[id*='lnkJobTitle']",
         "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
-        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdtxtDesc"
+        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdDesc, #ContentPlaceHolder1_JD1_tdtxtDesc"
     },
     "ungm": {
         "url": "https://www.ungm.org",
