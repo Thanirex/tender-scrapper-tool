@@ -113,10 +113,17 @@ class UNGMScraperAgent:
             cb = page.locator("input#chkIsActive")
             cb.wait_for(state="visible", timeout=5000)
             if not cb.is_checked():
-                cb.check()
+                # Use expect_response so we exit as soon as the AJAX call returns,
+                # instead of waiting for networkidle which UNGM never reaches.
+                try:
+                    with page.expect_response(
+                        lambda r: "/Public/Notice" in r.url and r.status == 200,
+                        timeout=6000
+                    ):
+                        cb.check()
+                except Exception:
+                    page.wait_for_timeout(1000)
             log("   ✓ Active-only filter enabled")
-            # Wait for the AJAX triggered by the checkbox to settle
-            page.wait_for_load_state("networkidle", timeout=5000)
         except Exception as e:
             log(f"   ℹ️ Active-only checkbox not found: {e}")
 
@@ -126,18 +133,22 @@ class UNGMScraperAgent:
             title_input.click()
             title_input.press("Control+a")
             # press_sequentially fires real keyboard events — fill() bypasses them on AJAX forms
-            title_input.press_sequentially(keyword, delay=40)
+            title_input.press_sequentially(keyword, delay=20)
         except Exception as e:
             log(f"   ❌ Could not fill keyword: {e}")
             return []
 
         try:
-            page.locator("button#lnkSearch").click()
-            # Wait for either results table or empty-notice div to become visible
+            # Wrap the click in expect_response so we exit as soon as the search
+            # AJAX returns — avoids the 8-second fallback wait_for_timeout.
             try:
-                page.locator("#tblNotices, #noticesEmpty").first.wait_for(state="visible", timeout=15000)
+                with page.expect_response(
+                    lambda r: "/Public/Notice" in r.url and r.status == 200,
+                    timeout=12000
+                ):
+                    page.locator("button#lnkSearch").click()
             except Exception:
-                page.wait_for_timeout(8000)
+                page.wait_for_timeout(2000)
             log(f"   🔍 Search submitted for '{keyword}'")
         except Exception as e:
             log(f"   ❌ Search submission failed: {e}")
