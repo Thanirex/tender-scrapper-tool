@@ -10,3 +10,5 @@ uvicorn
 websockets
 jinja2
 python-multipart
+python-jose[cryptography]
+bcrypt

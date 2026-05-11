@@ -5,9 +5,11 @@ import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-# Resolve paths module from app root regardless of cwd
+# Resolve paths / utils from app root regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from date_utils import is_within_24h_ist, extract_date_from_text
+
 
 class ScraperAgent:
     def __init__(self, config_path="sites_config.json"):
@@ -23,7 +25,26 @@ class ScraperAgent:
         page.wait_for_load_state("networkidle")
         return page.locator(site['results_link_selector']).count()
 
-    def search(self, site_key, keyword, log_callback=None, on_result_ready=None):
+    def _extract_pub_date(self, page, site) -> str | None:
+        """
+        Try to find the publication date for the currently loaded tender page.
+        Attempts a site-specific CSS selector first (if configured), then falls
+        back to regex scanning the full body text.
+        Returns the raw date string or None.
+        """
+        selector = site.get("date_selector")
+        if selector:
+            try:
+                return page.locator(selector).first.text_content().strip()
+            except Exception:
+                pass
+        try:
+            body_text = page.locator("body").text_content()
+        except Exception:
+            return None
+        return extract_date_from_text(body_text)
+
+    def search(self, site_key, keyword, log_callback=None, on_result_ready=None, db=None):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -58,31 +79,52 @@ class ScraperAgent:
                         links[i].click()
                         page.wait_for_load_state("networkidle")
                         current_url = page.url
-                        
-                        # Fix for DevNet: The page URL stays the same due to AJAX postback. 
+
+                        # Fix for DevNet: The page URL stays the same due to AJAX postback.
                         # We extract the true permalink from the form action.
                         if "devnetjobs" in current_url.lower():
                             try:
                                 form_action = page.locator("form").first.get_attribute("action")
                                 if form_action and "job_id=" in form_action:
-                                    # form_action looks like "./jobdescription.aspx?job_id=123"
                                     clean_path = form_action.lstrip("./")
                                     current_url = f"https://devnetjobsindia.org/{clean_path}"
-                            except:
+                            except Exception:
                                 pass
 
                         try:
                             title = page.locator(site['tender_title_selector']).first.text_content().strip()
-                        except:
+                        except Exception:
                             try:
                                 title = page.locator("h1, h2").first.text_content().strip()
-                            except:
+                            except Exception:
                                 title = f"Result_{i+1}"
 
                         try:
                             content = page.locator(site['tender_description_selector']).first.text_content().strip()
-                        except:
+                        except Exception:
                             content = "Could not extract content."
+
+                        # ── Date filter ──────────────────────────────────────────
+                        # Sites that only expose a deadline (not a publish date) set
+                        # skip_date_filter=true in sites_config.json.  For those sites
+                        # we skip the date check entirely and rely solely on dedup to
+                        # prevent re-downloading tenders seen in previous runs.
+                        if site.get("skip_date_filter"):
+                            pub_date = ""
+                        else:
+                            pub_date = self._extract_pub_date(page, site)
+                            if pub_date:
+                                if not is_within_24h_ist(pub_date):
+                                    log(f"   📅 Skipping '{title[:55]}' — published {pub_date} (>24h ago)")
+                                    continue
+                            else:
+                                log(f"   ⚠️ No publication date found for '{title[:55]}' — skipping")
+                                continue
+
+                        # ── Deduplication check ──────────────────────────────────
+                        if db and db.is_duplicate(title, current_url):
+                            log(f"   ⏩ Duplicate skipped: {title[:60]}")
+                            continue
 
                         # Per-tender folder: downloads/{site}/{keyword}/{title}/
                         safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
@@ -94,6 +136,10 @@ class ScraperAgent:
                         with open(txt_path, "w", encoding="utf-8") as f:
                             f.write(f"Source: {current_url}\nKeyword: {keyword}\nSite: {site_key}\n\n{content}")
                         log(f"   💾 Saved: {txt_path}")
+
+                        # Mark in DB so other keywords don't re-download the same tender
+                        if db:
+                            db.mark_downloaded(title, current_url, site_key, keyword, pub_date)
 
                         rec = {
                             "title": title,

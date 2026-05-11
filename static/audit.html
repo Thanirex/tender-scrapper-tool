@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAiQ — Audit Logs</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=14">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
+    </nav>
+
+    <div class="main-layout">
+        <div class="page-title-bar">
+            <div>
+                <h1 class="page-h1">Audit Logs</h1>
+                <p class="page-sub">All user activity across the platform</p>
+            </div>
+        </div>
+
+        <div class="filter-bar">
+            <input type="text" id="filter-user" class="filter-input" placeholder="Filter by username…">
+            <button class="secondary-btn filter-btn" id="apply-filter">Search</button>
+            <button class="secondary-btn filter-btn" id="clear-filter">Clear</button>
+            <span class="audit-total" id="audit-total"></span>
+        </div>
+
+        <div class="table-card">
+            <div id="audit-table-wrap">
+                <p class="empty-msg">Loading logs…</p>
+            </div>
+        </div>
+
+        <div class="pagination" id="pagination"></div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script src="/static/audit.js"></script>
+</body>
+</html>

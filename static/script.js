@@ -300,8 +300,65 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
         html += `</div>`;
+        html += `<div class="card-actions">`;
         if (record.url) html += `<a href="${record.url}" target="_blank" class="card-link">View ↗</a>`;
+        if (record.tender_dir) {
+            const token = getToken() || '';
+            const dlUrl = `/download/tender?path=${encodeURIComponent(record.tender_dir)}&token=${encodeURIComponent(token)}`;
+            html += `<a href="${dlUrl}" class="card-dl-btn" download>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                        Download All
+                     </a>`;
+            html += `<button class="card-files-btn" data-dir="${record.tender_dir}">📎 Files</button>`;
+        }
+        html += `</div>`;
         return html;
+    }
+
+    async function _toggleCardFiles(btn) {
+        const card = btn.closest('.result-card');
+        let list = card.querySelector('.card-files-list');
+        if (list) {
+            const hidden = list.style.display === 'none';
+            list.style.display = hidden ? '' : 'none';
+            btn.textContent = hidden ? '📎 Hide files' : '📎 Files';
+            return;
+        }
+        btn.textContent = 'Loading…';
+        btn.disabled = true;
+        try {
+            const token = getToken() || '';
+            const dir = btn.dataset.dir;
+            const res = await fetch(`/tender/files?dir=${encodeURIComponent(dir)}&token=${encodeURIComponent(token)}`);
+            const files = await res.json();
+            if (!Array.isArray(files) || files.length === 0) {
+                btn.textContent = '📎 No files';
+                return;
+            }
+            const token2 = getToken() || '';
+            list = document.createElement('div');
+            list.className = 'card-files-list';
+            list.innerHTML = files.map(f => {
+                const url = `/download/file?path=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token2)}`;
+                return `<div class="card-file-item">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <a href="${url}" download title="${f.name}">${f.name}</a>
+                </div>`;
+            }).join('');
+            card.appendChild(list);
+            btn.textContent = '📎 Hide files';
+        } catch (_) {
+            btn.textContent = '📎 Error';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    if (resultsGrid) {
+        resultsGrid.addEventListener('click', e => {
+            const btn = e.target.closest('.card-files-btn');
+            if (btn) _toggleCardFiles(btn);
+        });
     }
 
     // ── Start Extraction ──────────────────────────────────────────────────
@@ -369,7 +426,8 @@ document.addEventListener('DOMContentLoaded', () => {
         pushThought('Establishing connection…');
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/scrape`);
+        const wsToken = getToken() || '';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/ws/scrape?token=${encodeURIComponent(wsToken)}`);
 
         ws.onopen = () => {
             setTrackerStep('connecting', 'Connected — sending request…');
@@ -483,7 +541,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         ? `TAiQ found and summarised ${foundCount} tender opportunit${foundCount === 1 ? 'y' : 'ies'} across your keywords.`
                         : 'No opportunities were found for these keywords.';
                 }
-                if (downloadBtn) downloadBtn.href = `/download?name=${encodeURIComponent(zipFilename)}`;
+                if (downloadBtn) {
+                    if (zipFilename) {
+                        downloadBtn.href = `/download?name=${encodeURIComponent(zipFilename)}`;
+                        downloadBtn.style.display = '';
+                    } else {
+                        downloadBtn.style.display = 'none';
+                    }
+                }
 
                 if (allResults.length > 0) {
                     resultsGrid.innerHTML = allResults.map((r, i) =>

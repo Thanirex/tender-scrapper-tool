@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAiQ — Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=14">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <div class="login-wrapper">
+        <div class="login-card">
+            <div class="login-logo">TAiQ</div>
+            <h1 class="login-title">Welcome back</h1>
+            <p class="login-subtitle">Sign in to your TAiQ account</p>
+
+            <div class="login-error hidden" id="login-error"></div>
+
+            <form id="login-form" autocomplete="on">
+                <div class="input-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" class="large-input"
+                           placeholder="Enter your username" autocomplete="username" required>
+                </div>
+                <div class="input-group mt-4">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" class="large-input"
+                           placeholder="••••••••" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="primary-btn login-submit-btn" id="login-btn">
+                    Sign In <span>→</span>
+                </button>
+            </form>
+
+            <div class="login-footer">
+                <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script>
+        // If already logged in, redirect
+        if (getUser()) window.location.href = '/';
+
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('login-btn');
+            const errorEl = document.getElementById('login-error');
+            errorEl.classList.add('hidden');
+            btn.disabled = true;
+            btn.innerHTML = 'Signing in… <span>⏳</span>';
+
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            try {
+                const res = await fetch('/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    errorEl.textContent = data.detail || 'Login failed';
+                    errorEl.classList.remove('hidden');
+                    btn.disabled = false;
+                    btn.innerHTML = 'Sign In <span>→</span>';
+                    return;
+                }
+                setToken(data.access_token);
+                window.location.href = '/';
+            } catch {
+                errorEl.textContent = 'Could not connect to the server.';
+                errorEl.classList.remove('hidden');
+                btn.disabled = false;
+                btn.innerHTML = 'Sign In <span>→</span>';
+            }
+        });
+    </script>
+</body>
+</html>

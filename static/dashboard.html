@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAiQ — Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=14">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
+    </nav>
+
+    <div class="main-layout">
+        <div class="page-title-bar">
+            <div>
+                <h1 class="page-h1">Dashboard</h1>
+                <p class="page-sub" id="selected-date-label">Today's overview</p>
+            </div>
+        </div>
+
+        <!-- Stats row -->
+        <div class="stats-row" id="stats-row">
+            <div class="stat-card stat-placeholder">Loading…</div>
+        </div>
+
+        <!-- Main split -->
+        <div class="dash-grid">
+            <!-- Calendar -->
+            <div class="calendar-panel">
+                <div class="calendar-header">
+                    <button class="cal-nav-btn" id="cal-prev">&#8592;</button>
+                    <span class="cal-month-label" id="cal-month-label"></span>
+                    <button class="cal-nav-btn" id="cal-next">&#8594;</button>
+                </div>
+                <div class="cal-weekdays">
+                    <span>Mo</span><span>Tu</span><span>We</span>
+                    <span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
+                </div>
+                <div class="cal-grid" id="cal-grid"></div>
+            </div>
+
+            <!-- Content -->
+            <div class="dash-content">
+                <!-- User activity -->
+                <div class="dash-section">
+                    <div class="dash-section-header">
+                        <h2>Run Activity</h2>
+                    </div>
+                    <div class="table-wrap" id="activity-wrap">
+                        <p class="empty-msg">No runs on this date.</p>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="dash-section">
+                    <div class="dash-section-header">
+                        <h2>Tenders Found</h2>
+                        <div class="filter-row">
+                            <select id="filter-site" class="filter-select">
+                                <option value="">All Sites</option>
+                            </select>
+                            <input type="text" id="filter-keyword" class="filter-input"
+                                   placeholder="Filter keyword…">
+                            <button class="secondary-btn filter-btn" id="apply-filter">Filter</button>
+                        </div>
+                    </div>
+                    <div class="dash-results-grid" id="tenders-grid">
+                        <p class="empty-msg">No tenders found for this date.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script src="/static/dashboard.js"></script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAiQ — Users</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=14">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
+    </nav>
+
+    <div class="main-layout">
+        <div class="page-title-bar">
+            <div>
+                <h1 class="page-h1">Users</h1>
+                <p class="page-sub">Manage accounts and access levels</p>
+            </div>
+            <button class="primary-btn" id="create-user-btn">+ Create User</button>
+        </div>
+
+        <div class="table-card">
+            <div id="users-table-wrap">
+                <p class="empty-msg">Loading users…</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create / Edit Modal -->
+    <div class="modal-overlay hidden" id="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="modal-title">Create User</h3>
+                <button class="modal-close" id="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="m-username" class="large-input" placeholder="e.g. jsmith">
+                </div>
+                <div class="input-group mt-4">
+                    <label>Email</label>
+                    <input type="email" id="m-email" class="large-input" placeholder="e.g. j@example.com">
+                </div>
+                <div class="input-group mt-4" id="m-password-wrap">
+                    <label>Password</label>
+                    <input type="password" id="m-password" class="large-input" placeholder="••••••••">
+                </div>
+                <div class="input-group mt-4" id="m-role-wrap">
+                    <label>Role</label>
+                    <select id="m-role" class="large-input">
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+                <div class="modal-error hidden" id="modal-error"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="secondary-btn" id="modal-cancel">Cancel</button>
+                <button class="primary-btn" id="modal-save">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script src="/static/users.js"></script>
+</body>
+</html>

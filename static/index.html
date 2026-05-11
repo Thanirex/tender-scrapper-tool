@@ -21,8 +21,14 @@
     </div>
 
     <nav class="top-nav">
-        <div class="logo">TAiQ</div>
-        <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
     </nav>
 
     <div class="main-layout">
@@ -220,6 +226,9 @@
 
     </div>
 
-    <script src="/static/script.js?v=7"></script>
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script>initNav();</script>
+    <script src="/static/script.js?v=8"></script>
 </body>
 </html>

@@ -1,8 +1,12 @@
 import os
 import re
+import sys
 import platform
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from date_utils import is_within_24h_ist, extract_date_from_text
 
 # Lift this number to raise the per-keyword tender cap
 RESULTS_CAP = 10
@@ -14,7 +18,8 @@ class UNGMScraperAgent:
     NOTICES_URL = "https://www.ungm.org/Public/Notice"
 
     def scrape(self, email: str, password: str, keywords: list, run_dir: str,
-               headless: bool = True, log_callback=None, on_tender_ready=None) -> list:
+               headless: bool = True, log_callback=None, on_tender_ready=None,
+               db=None) -> list:
         """
         Full UNGM flow: login → per-keyword search → extract → download.
         on_tender_ready(rec): optional callback fired immediately after each tender
@@ -48,7 +53,7 @@ class UNGMScraperAgent:
 
                 for keyword in keywords:
                     log(f"▶️ Keyword: '{keyword}'")
-                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log, on_tender_ready)
+                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log, on_tender_ready, db)
                     all_results.extend(kw_results)
                     log(f"   ↳ {len(kw_results)} tenders processed for '{keyword}'")
 
@@ -102,7 +107,7 @@ class UNGMScraperAgent:
         log("✅ Logged in.")
         return True
 
-    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None) -> list:
+    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None) -> list:
         if not self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle"):
             return []
 
@@ -188,7 +193,7 @@ class UNGMScraperAgent:
         results = []
         for idx, href in enumerate(hrefs):
             log(f"   📄 [{idx+1}/{len(hrefs)}] {href}")
-            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log)
+            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log, db)
             if rec:
                 results.append(rec)
                 if on_tender_ready:
@@ -201,7 +206,7 @@ class UNGMScraperAgent:
         "forbidden", "page not found", "error 500", "bad request",
     }
 
-    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log) -> dict | None:
+    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None) -> dict | None:
         """
         Open the notice in a FRESH TAB so the search-results page stays intact.
         The original `page` is never navigated away — only used for keyword search.
@@ -265,6 +270,28 @@ class UNGMScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            # ── Date filter: last 24 hours IST ──────────────────────────────
+            # Try verified "Published on" field first; fall back to body text.
+            pub_date = next(
+                (v for k, v in verified.items() if "published" in k.lower()),
+                None,
+            )
+            if not pub_date:
+                pub_date = extract_date_from_text(body_text)
+
+            if pub_date:
+                if not is_within_24h_ist(pub_date):
+                    log(f"      📅 Skipping '{title[:60]}' — published {pub_date} (>24h ago)")
+                    return None
+            else:
+                log(f"      ⚠️ No publication date found for '{title[:60]}' — skipping")
+                return None
+
+            # ── Deduplication check ──────────────────────────────────────────
+            if db and db.is_duplicate(title, url):
+                log(f"      ⏩ Duplicate skipped: {title[:60]}")
+                return None
 
             # Folder for this tender (short paths — Windows MAX_PATH = 260)
             safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
@@ -525,6 +552,10 @@ class UNGMScraperAgent:
                     log(f"      📝 No attachments — saved page text as page_content.txt")
                 else:
                     log(f"      📝 Page content saved to disk alongside documents")
+
+            # Mark in DB so subsequent keywords don't re-download this tender
+            if db:
+                db.mark_downloaded(title, url, "ungm", keyword, pub_date or "")
 
             return {
                 "keyword": keyword,

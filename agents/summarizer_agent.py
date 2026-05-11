@@ -222,8 +222,8 @@ EXTRACTION RULES:
 - TMI_SERVICE_LINE: exactly one of C&K / HR&KM / Both
 - CONSORTIUM: Allowed / Not Allowed / Permitted with conditions / Not specified
 - SCOPE_CLARITY: Yes / Partially / No
-- Keep each value on ONE line (no line breaks inside a value).
-- SCOPE_OF_WORK, ELIGIBILITY_DETAILS, and ACCESS_REQUIREMENTS may be up to 500 chars.
+- CRITICAL — output EVERY field value on a SINGLE line. No bullet points, no numbered lists, no line breaks inside a value. Use " | " to separate multiple items (e.g. multiple eligibility criteria or clarification contacts).
+- SCOPE_OF_WORK, ELIGIBILITY_DETAILS, and ACCESS_REQUIREMENTS may be up to 500 chars on that single line.
 
 REQUIRED FIELDS:
 REFERENCE_NO: official tender reference or RFP number (e.g. IFAD/2026/006/RFP). Look for patterns like ORG/YEAR/NNN/TYPE or any alphanumeric code labelled "reference", "RFP no.", "tender no.", "notice ref."
@@ -259,14 +259,34 @@ TENDER CONTENT:
 {snippet}"""
 
     def _parse_level1_fields(self, raw: str) -> dict:
-        fields = {}
+        # Strip any markdown bold/italic the LLM wraps around key names
+        raw = re.sub(r'\*{1,2}([A-Z_]+)\*{1,2}\s*:', r'\1:', raw)
+
+        acc: dict[str, list[str]] = {}
+        current_key: str | None = None
+
         for line in raw.splitlines():
-            if ": " not in line:
+            stripped = line.strip()
+            if not stripped:
                 continue
-            key, _, val = line.partition(": ")
-            key = key.strip()
-            if key not in self._KNOWN_KEYS:
-                continue
-            val = re.sub(r'^\[(?:VERIFIED|EXTRACTED|NOT_FOUND|V|MISMATCH[^\]]*)\]\s*', '', val).strip()
-            fields[key] = val
-        return fields
+
+            # Match KEY: value  OR  KEY:value  (space after colon is optional)
+            m = re.match(r'^([A-Z][A-Z_0-9]*)\s*:\s*(.*)', stripped)
+            if m and m.group(1) in self._KNOWN_KEYS:
+                current_key = m.group(1)
+                acc[current_key] = [m.group(2).strip()]
+            elif current_key is not None:
+                # Continuation line — strip leading bullet / numbered-list markers
+                cont = re.sub(r'^[\-\*\•\d\.]+\s*', '', stripped)
+                if cont:
+                    acc[current_key].append(cont)
+
+        _marker = re.compile(
+            r'^\[(?:VERIFIED|EXTRACTED|NOT_FOUND|V|MISMATCH[^\]]*)\]\s*', re.I
+        )
+        result = {}
+        for key, parts in acc.items():
+            val = ' | '.join(p for p in parts if p).strip()
+            val = _marker.sub('', val).strip()
+            result[key] = val
+        return result

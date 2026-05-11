@@ -5,7 +5,8 @@
         "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
         "results_link_selector": "a[id*='lnkJobTitle']",
         "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
-        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdDesc, #ContentPlaceHolder1_JD1_tdtxtDesc"
+        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdDesc, #ContentPlaceHolder1_JD1_tdtxtDesc",
+        "skip_date_filter": true
     },
     "ungm": {
         "url": "https://www.ungm.org",
