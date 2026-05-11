@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import sqlite3
@@ -8,26 +9,144 @@ from pathlib import Path
 def _normalize(title: str) -> str:
     t = title.lower()
     t = re.sub(r'[^a-z0-9\s]', ' ', t)
-    t = re.sub(r'\s+', ' ', t).strip()
-    return t
+    return re.sub(r'\s+', ' ', t).strip()
 
+
+# ── Database backend detection ─────────────────────────────────────────────────
+#
+# Set DATABASE_URL in .env to switch backends:
+#   SQLite (default):   DATABASE_URL=sqlite:///path/to/custom.db
+#   PostgreSQL:         DATABASE_URL=postgresql://user:pass@host:5432/dbname
+#
+# If DATABASE_URL is not set, SQLite at DB_PATH (from paths.py) is used.
+
+_DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+_IS_PG        = _DATABASE_URL.startswith(("postgresql://", "postgres://"))
+
+# PRIMARY KEY fragment differs between backends
+_PK = "SERIAL PRIMARY KEY" if _IS_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+
+def _get_sqlite_path(fallback: str) -> str:
+    """If DATABASE_URL is a sqlite:// URI, extract the file path from it."""
+    if _DATABASE_URL.startswith("sqlite:///"):
+        return _DATABASE_URL[len("sqlite:///"):]
+    return fallback
+
+
+# ── Normalized cursor ──────────────────────────────────────────────────────────
+
+class _Cursor:
+    """Wraps sqlite3.Cursor or psycopg2 cursor; always returns plain dicts."""
+
+    def __init__(self, raw, conn_raw, pg: bool):
+        self._c    = raw
+        self._conn = conn_raw  # raw conn, used for lastval() in PG
+        self._pg   = pg
+
+    def fetchone(self) -> "dict | None":
+        row = self._c.fetchone()
+        return dict(row) if row else None
+
+    def fetchall(self) -> "list[dict]":
+        return [dict(r) for r in self._c.fetchall()]
+
+    @property
+    def lastrowid(self) -> "int | None":
+        if self._pg:
+            # lastval() returns the most recently generated SERIAL value in
+            # the current session — safe to call immediately after an INSERT.
+            try:
+                tmp = self._conn.cursor()
+                tmp.execute("SELECT lastval()")
+                return tmp.fetchone()[0]
+            except Exception:
+                return None
+        return self._c.lastrowid
+
+
+# ── Normalized connection ──────────────────────────────────────────────────────
+
+class _Conn:
+    """Context-managed DB connection for SQLite or PostgreSQL.
+
+    Usage is identical to sqlite3 connection context managers:
+
+        with self._connect() as conn:
+            conn.execute(sql, params)
+            conn.commit()
+    """
+
+    def __init__(self, sqlite_path: str):
+        self._path = sqlite_path
+        self._raw  = None
+
+    def __enter__(self) -> "_Conn":
+        if _IS_PG:
+            import psycopg2
+            self._raw = psycopg2.connect(_DATABASE_URL)
+        else:
+            self._raw = sqlite3.connect(
+                _get_sqlite_path(self._path), timeout=10, check_same_thread=False
+            )
+            self._raw.row_factory = sqlite3.Row
+        return self
+
+    def __exit__(self, exc_type, *_):
+        if self._raw:
+            try:
+                if exc_type:
+                    self._raw.rollback()
+                else:
+                    self._raw.commit()
+            finally:
+                self._raw.close()
+                self._raw = None
+
+    def execute(self, sql: str, params=()) -> _Cursor:
+        """Execute SQL.  Rewrites ? → %s automatically for PostgreSQL."""
+        if _IS_PG:
+            import psycopg2.extras
+            sql = sql.replace("?", "%s")
+            cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(sql, params or ())
+            return _Cursor(cur, self._raw, pg=True)
+        cur = self._raw.execute(sql, params or ())
+        return _Cursor(cur, self._raw, pg=False)
+
+    def commit(self):
+        if self._raw:
+            self._raw.commit()
+
+
+# ── Main DB class ──────────────────────────────────────────────────────────────
 
 class TenderDB:
     def __init__(self, db_path: Path):
         self._path = str(db_path)
         self._init_schema()
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._path, timeout=10, check_same_thread=False)
-        conn.row_factory = sqlite3.Row
-        return conn
+    def _connect(self) -> _Conn:
+        return _Conn(self._path)
+
+    def _add_col(self, conn: _Conn, table: str, col: str, defn: str):
+        """Add a column to an existing table, silently skipping if it already exists."""
+        if _IS_PG:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {defn}"
+            )
+        else:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
+            except sqlite3.OperationalError:
+                pass  # column already exists
 
     def _init_schema(self):
         with self._connect() as conn:
-            # ── Legacy dedup table (unchanged) ─────────────────────────────
-            conn.execute("""
+            # ── Dedup table ────────────────────────────────────────────────
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS downloaded_tenders (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id              {_PK},
                     title_norm      TEXT    NOT NULL,
                     url             TEXT,
                     site            TEXT,
@@ -47,9 +166,9 @@ class TenderDB:
             )
 
             # ── Users ──────────────────────────────────────────────────────
-            conn.execute("""
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS users (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id            {_PK},
                     username      TEXT    NOT NULL UNIQUE,
                     email         TEXT    NOT NULL UNIQUE,
                     password_hash TEXT    NOT NULL,
@@ -62,9 +181,9 @@ class TenderDB:
             """)
 
             # ── Search sessions ────────────────────────────────────────────
-            conn.execute("""
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS search_sessions (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id           {_PK},
                     user_id      INTEGER NOT NULL REFERENCES users(id),
                     site         TEXT    NOT NULL,
                     run_date     TEXT    NOT NULL,
@@ -79,19 +198,19 @@ class TenderDB:
             )
 
             # ── Keywords per session ───────────────────────────────────────
-            conn.execute("""
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS session_keywords (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id            {_PK},
                     session_id    INTEGER NOT NULL REFERENCES search_sessions(id),
                     keyword       TEXT    NOT NULL,
                     tenders_found INTEGER NOT NULL DEFAULT 0
                 )
             """)
 
-            # ── Found tenders ──────────────────────────────────────────────
-            conn.execute("""
+            # ── Found tenders (manual scrapes) ─────────────────────────────
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS found_tenders (
-                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id             {_PK},
                     session_id     INTEGER NOT NULL REFERENCES search_sessions(id),
                     keyword        TEXT    NOT NULL,
                     title          TEXT    NOT NULL,
@@ -103,20 +222,16 @@ class TenderDB:
                     found_at       TEXT    NOT NULL
                 )
             """)
-            # Migration: add tender_dir to existing databases
-            try:
-                conn.execute("ALTER TABLE found_tenders ADD COLUMN tender_dir TEXT")
-            except sqlite3.OperationalError:
-                pass  # column already exists
+            self._add_col(conn, "found_tenders", "tender_dir", "TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_found_session "
                 "ON found_tenders (session_id)"
             )
 
             # ── Tender documents ───────────────────────────────────────────
-            conn.execute("""
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS tender_documents (
-                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id         {_PK},
                     tender_id  INTEGER NOT NULL REFERENCES found_tenders(id),
                     filename   TEXT    NOT NULL,
                     file_path  TEXT    NOT NULL,
@@ -126,10 +241,10 @@ class TenderDB:
                 )
             """)
 
-            # ── Activity logs ──────────────────────────────────────────────
-            conn.execute("""
+            # ── Audit / activity log ───────────────────────────────────────
+            conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS activity_logs (
-                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    id           {_PK},
                     user_id      INTEGER REFERENCES users(id),
                     username     TEXT,
                     action       TEXT    NOT NULL,
@@ -143,9 +258,74 @@ class TenderDB:
                 "ON activity_logs (timestamp)"
             )
 
-            conn.commit()
+            # ── TAiQ cron runs ─────────────────────────────────────────────
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS cron_runs (
+                    id              {_PK},
+                    run_date        TEXT    NOT NULL,
+                    started_at      TEXT    NOT NULL,
+                    finished_at     TEXT,
+                    status          TEXT    NOT NULL DEFAULT 'running',
+                    total_keywords  INTEGER NOT NULL DEFAULT 0,
+                    keywords_done   INTEGER NOT NULL DEFAULT 0,
+                    total_tenders   INTEGER NOT NULL DEFAULT 0,
+                    error_msg       TEXT,
+                    stop_requested  INTEGER NOT NULL DEFAULT 0,
+                    current_keyword TEXT    NOT NULL DEFAULT '',
+                    log_file        TEXT
+                )
+            """)
+            self._add_col(conn, "cron_runs", "stop_requested",  "INTEGER NOT NULL DEFAULT 0")
+            self._add_col(conn, "cron_runs", "current_keyword", "TEXT    NOT NULL DEFAULT ''")
+            self._add_col(conn, "cron_runs", "log_file",        "TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cron_runs_date "
+                "ON cron_runs (run_date)"
+            )
 
-    # ── Dedup (unchanged public API) ───────────────────────────────────────
+            # ── TAiQ cron tenders ──────────────────────────────────────────
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS cron_tenders (
+                    id              {_PK},
+                    run_id          INTEGER NOT NULL REFERENCES cron_runs(id),
+                    keyword         TEXT    NOT NULL,
+                    title           TEXT    NOT NULL,
+                    url             TEXT,
+                    site            TEXT    NOT NULL,
+                    published_date  TEXT,
+                    summary_json    TEXT,
+                    tender_dir      TEXT,
+                    found_at        TEXT    NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cron_tenders_run "
+                "ON cron_tenders (run_id)"
+            )
+
+            # ── Cron dedup ─────────────────────────────────────────────────
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS cron_dedup (
+                    id              {_PK},
+                    title_norm      TEXT    NOT NULL,
+                    url             TEXT,
+                    site            TEXT,
+                    keyword         TEXT,
+                    published_date  TEXT,
+                    found_at        TEXT    NOT NULL
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cron_dedup_title "
+                "ON cron_dedup (title_norm)"
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_dedup_url "
+                "ON cron_dedup (url) "
+                "WHERE url IS NOT NULL AND url != ''"
+            )
+
+    # ── Dedup ──────────────────────────────────────────────────────────────────
 
     def is_duplicate(self, title: str, url: str = "") -> bool:
         with self._connect() as conn:
@@ -164,17 +344,17 @@ class TenderDB:
     def mark_downloaded(self, title: str, url: str, site: str,
                         keyword: str, published_date: str = ""):
         norm = _normalize(title)
-        now = datetime.now().isoformat(timespec="seconds")
+        now  = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
-                """INSERT OR IGNORE INTO downloaded_tenders
+                """INSERT INTO downloaded_tenders
                    (title_norm, url, site, keyword, published_date, downloaded_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT DO NOTHING""",
                 (norm, url or "", site or "", keyword or "", published_date or "", now),
             )
-            conn.commit()
 
-    # ── User management ────────────────────────────────────────────────────
+    # ── User management ────────────────────────────────────────────────────────
 
     def create_user(self, username: str, email: str, password_hash: str,
                     role: str, created_by: int = None) -> int:
@@ -186,61 +366,52 @@ class TenderDB:
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (username, email, password_hash, role, created_by, now),
             )
-            conn.commit()
             return cur.lastrowid
 
-    def get_user_by_username(self, username: str) -> dict | None:
+    def get_user_by_username(self, username: str) -> "dict | None":
         with self._connect() as conn:
-            row = conn.execute(
+            return conn.execute(
                 "SELECT * FROM users WHERE username = ?", (username,)
             ).fetchone()
-            return dict(row) if row else None
 
-    def get_user_by_id(self, user_id: int) -> dict | None:
+    def get_user_by_id(self, user_id: int) -> "dict | None":
         with self._connect() as conn:
-            row = conn.execute(
+            return conn.execute(
                 "SELECT * FROM users WHERE id = ?", (user_id,)
             ).fetchone()
-            return dict(row) if row else None
 
-    def list_users(self, requester_role: str, requester_id: int) -> list[dict]:
+    def list_users(self, requester_role: str, requester_id: int) -> "list[dict]":
         with self._connect() as conn:
             if requester_role == "superadmin":
-                rows = conn.execute(
-                    """SELECT id, username, email, role, created_at, is_active,
-                              created_by
+                return conn.execute(
+                    """SELECT id, username, email, role, created_at, is_active, created_by
                        FROM users ORDER BY created_at DESC"""
                 ).fetchall()
-            else:
-                rows = conn.execute(
-                    """SELECT id, username, email, role, created_at, is_active,
-                              created_by
-                       FROM users
-                       WHERE created_by = ? OR id = ?
-                       ORDER BY created_at DESC""",
-                    (requester_id, requester_id),
-                ).fetchall()
-            return [dict(r) for r in rows]
+            return conn.execute(
+                """SELECT id, username, email, role, created_at, is_active, created_by
+                   FROM users
+                   WHERE created_by = ? OR id = ?
+                   ORDER BY created_at DESC""",
+                (requester_id, requester_id),
+            ).fetchall()
 
     def update_user(self, user_id: int, **kwargs):
         allowed = {"username", "email", "password_hash", "is_active"}
-        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        fields  = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
         sets = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [user_id]
         with self._connect() as conn:
             conn.execute(f"UPDATE users SET {sets} WHERE id = ?", vals)
-            conn.commit()
 
     def superadmin_exists(self) -> bool:
         with self._connect() as conn:
-            row = conn.execute(
+            return bool(conn.execute(
                 "SELECT 1 FROM users WHERE role='superadmin' LIMIT 1"
-            ).fetchone()
-            return row is not None
+            ).fetchone())
 
-    # ── Search sessions ────────────────────────────────────────────────────
+    # ── Search sessions ────────────────────────────────────────────────────────
 
     def create_session(self, user_id: int, site: str) -> int:
         now = datetime.now()
@@ -251,7 +422,6 @@ class TenderDB:
                    VALUES (?, ?, ?, 'running', ?)""",
                 (user_id, site, now.strftime("%Y-%m-%d"), now.isoformat(timespec="seconds")),
             )
-            conn.commit()
             return cur.lastrowid
 
     def update_session_status(self, session_id: int, status: str):
@@ -260,7 +430,6 @@ class TenderDB:
                 "UPDATE search_sessions SET status = ? WHERE id = ?",
                 (status, session_id),
             )
-            conn.commit()
 
     def update_session_zip(self, session_id: int, zip_filename: str):
         with self._connect() as conn:
@@ -268,7 +437,6 @@ class TenderDB:
                 "UPDATE search_sessions SET zip_filename = ? WHERE id = ?",
                 (zip_filename, session_id),
             )
-            conn.commit()
 
     def upsert_session_keyword(self, session_id: int, keyword: str, count: int):
         with self._connect() as conn:
@@ -287,7 +455,6 @@ class TenderDB:
                     "VALUES (?, ?, ?)",
                     (session_id, keyword, count),
                 )
-            conn.commit()
 
     def record_found_tender(self, session_id: int, keyword: str, title: str,
                              url: str, site: str, published_date: str = "",
@@ -303,10 +470,9 @@ class TenderDB:
                  published_date or "", json.dumps(summary or {}),
                  tender_dir or "", now),
             )
-            conn.commit()
             return cur.lastrowid
 
-    # ── Dashboard queries ──────────────────────────────────────────────────
+    # ── Dashboard queries ──────────────────────────────────────────────────────
 
     def get_stats_for_date(self, date_str: str) -> dict:
         with self._connect() as conn:
@@ -334,48 +500,97 @@ class TenderDB:
                 (date_str,),
             ).fetchall()
 
-            return {
-                "sessions": [dict(r) for r in session_rows],
-                "by_site": [dict(r) for r in by_site_rows],
-            }
+            cron_row = conn.execute(
+                "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
+                (date_str,),
+            ).fetchone()
+
+        sessions = list(session_rows)
+        by_site  = list(by_site_rows)
+
+        if cron_row and cron_row["status"] in ("complete", "failed", "stopped"):
+            sessions.append({
+                "id":            f"taiq_{cron_row['id']}",
+                "username":      "TAiQ",
+                "site":          "taiq",
+                "status":        cron_row["status"],
+                "zip_filename":  None,
+                "created_at":    cron_row["started_at"],
+                "keywords":      f"{cron_row['keywords_done']}/{cron_row['total_keywords']} keywords",
+                "tenders_found": cron_row["total_tenders"] or 0,
+                "source":        "taiq",
+            })
+            taiq_count = cron_row["total_tenders"] or 0
+            if taiq_count > 0:
+                by_site.append({"site": "taiq", "count": taiq_count})
+
+        return {"sessions": sessions, "by_site": by_site}
 
     def get_tenders_for_date(self, date_str: str,
-                              site: str = None, keyword: str = None) -> list[dict]:
-        with self._connect() as conn:
-            q = """SELECT ft.*
-                   FROM found_tenders ft
-                   JOIN search_sessions s ON s.id = ft.session_id
-                   WHERE s.run_date = ?"""
-            params: list = [date_str]
-            if site:
-                q += " AND s.site = ?"
-                params.append(site)
-            if keyword:
-                q += " AND ft.keyword LIKE ?"
-                params.append(f"%{keyword}%")
-            q += " ORDER BY ft.found_at DESC"
-            rows = conn.execute(q, params).fetchall()
-
+                              site: str = None, keyword: str = None) -> "list[dict]":
         result = []
-        for r in rows:
-            d = dict(r)
-            try:
-                d["fields"] = json.loads(d.get("summary_json") or "{}")
-            except Exception:
-                d["fields"] = {}
-            result.append(d)
+
+        if site != "taiq":
+            with self._connect() as conn:
+                q      = """SELECT ft.*
+                            FROM found_tenders ft
+                            JOIN search_sessions s ON s.id = ft.session_id
+                            WHERE s.run_date = ?"""
+                params: list = [date_str]
+                if site:
+                    q += " AND s.site = ?"
+                    params.append(site)
+                if keyword:
+                    q += " AND ft.keyword LIKE ?"
+                    params.append(f"%{keyword}%")
+                q += " ORDER BY ft.found_at DESC"
+                rows = conn.execute(q, params).fetchall()
+            for r in rows:
+                try:
+                    r["fields"] = json.loads(r.get("summary_json") or "{}")
+                except Exception:
+                    r["fields"] = {}
+                result.append(r)
+
+        if not site or site == "taiq":
+            cron_run = self.get_cron_run_by_date(date_str)
+            if cron_run:
+                with self._connect() as conn:
+                    q      = "SELECT * FROM cron_tenders WHERE run_id = ?"
+                    params = [cron_run["id"]]
+                    if keyword:
+                        q += " AND keyword LIKE ?"
+                        params.append(f"%{keyword}%")
+                    q += " ORDER BY found_at DESC"
+                    rows = conn.execute(q, params).fetchall()
+                for r in rows:
+                    try:
+                        r["fields"] = json.loads(r.get("summary_json") or "{}")
+                    except Exception:
+                        r["fields"] = {}
+                    r["source"] = "taiq"
+                    result.append(r)
+
+        result.sort(key=lambda x: x.get("found_at", ""), reverse=True)
         return result
 
-    def get_dates_with_data(self) -> list[str]:
+    def get_dates_with_data(self) -> "list[str]":
         with self._connect() as conn:
-            rows = conn.execute(
+            manual_rows = conn.execute(
                 """SELECT DISTINCT run_date FROM search_sessions
                    WHERE status = 'complete'
                    ORDER BY run_date DESC LIMIT 90"""
             ).fetchall()
-            return [r["run_date"] for r in rows]
+            cron_rows = conn.execute(
+                """SELECT DISTINCT run_date FROM cron_runs
+                   WHERE status IN ('complete', 'stopped', 'failed')
+                   ORDER BY run_date DESC LIMIT 90"""
+            ).fetchall()
+        manual_dates = {r["run_date"] for r in manual_rows}
+        cron_dates   = {r["run_date"] for r in cron_rows}
+        return sorted(manual_dates | cron_dates, reverse=True)[:90]
 
-    # ── Activity logging ───────────────────────────────────────────────────
+    # ── Activity logging ───────────────────────────────────────────────────────
 
     def log_activity(self, user_id: int, username: str, action: str,
                      details: dict = None, ip_address: str = None):
@@ -388,7 +603,6 @@ class TenderDB:
                 (user_id, username, action,
                  json.dumps(details or {}), ip_address, now),
             )
-            conn.commit()
 
     def get_activity_logs(self, page: int = 1, limit: int = 50,
                           user_id: int = None) -> dict:
@@ -401,16 +615,171 @@ class TenderDB:
 
         with self._connect() as conn:
             total = conn.execute(
-                f"SELECT COUNT(*) {base_q}", params
-            ).fetchone()[0]
+                f"SELECT COUNT(*) AS n {base_q}", params
+            ).fetchone()["n"]
             rows = conn.execute(
                 f"SELECT * {base_q} ORDER BY timestamp DESC LIMIT ? OFFSET ?",
                 params + [limit, offset],
             ).fetchall()
 
-        return {
-            "total": total,
-            "page": page,
-            "limit": limit,
-            "items": [dict(r) for r in rows],
-        }
+        return {"total": total, "page": page, "limit": limit, "items": rows}
+
+    # ── TAiQ cron ──────────────────────────────────────────────────────────────
+
+    def create_cron_run(self, total_keywords: int = 0) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        try:
+            import pytz
+            run_date = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
+        except Exception:
+            run_date = datetime.now().strftime("%Y-%m-%d")
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO cron_runs
+                   (run_date, started_at, status, total_keywords)
+                   VALUES (?, ?, 'running', ?)""",
+                (run_date, now, total_keywords),
+            )
+            return cur.lastrowid
+
+    def update_cron_run(self, run_id: int, **kwargs):
+        allowed = {"status", "finished_at", "keywords_done", "total_tenders",
+                   "error_msg", "total_keywords", "current_keyword",
+                   "stop_requested", "log_file"}
+        fields = {k: v for k, v in kwargs.items() if k in allowed}
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        vals = list(fields.values()) + [run_id]
+        with self._connect() as conn:
+            conn.execute(f"UPDATE cron_runs SET {sets} WHERE id = ?", vals)
+
+    def record_cron_tender(self, run_id: int, keyword: str, title: str,
+                            url: str, site: str, published_date: str = "",
+                            summary: dict = None, tender_dir: str = "") -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            cur = conn.execute(
+                """INSERT INTO cron_tenders
+                   (run_id, keyword, title, url, site, published_date,
+                    summary_json, tender_dir, found_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (run_id, keyword, title, url or "", site,
+                 published_date or "", json.dumps(summary or {}),
+                 tender_dir or "", now),
+            )
+            return cur.lastrowid
+
+    def is_cron_duplicate(self, title: str, url: str = "") -> bool:
+        with self._connect() as conn:
+            if url:
+                row = conn.execute(
+                    "SELECT 1 FROM cron_dedup WHERE url = ? LIMIT 1", (url,)
+                ).fetchone()
+                if row:
+                    return True
+            norm = _normalize(title)
+            return bool(conn.execute(
+                "SELECT 1 FROM cron_dedup WHERE title_norm = ? LIMIT 1", (norm,)
+            ).fetchone())
+
+    def mark_cron_seen(self, title: str, url: str, site: str,
+                       keyword: str, published_date: str = ""):
+        norm = _normalize(title)
+        now  = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO cron_dedup
+                   (title_norm, url, site, keyword, published_date, found_at)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT DO NOTHING""",
+                (norm, url or "", site or "", keyword or "", published_date or "", now),
+            )
+
+    def get_cron_run(self, run_id: int) -> "dict | None":
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM cron_runs WHERE id = ?", (run_id,)
+            ).fetchone()
+
+    def get_latest_cron_run(self) -> "dict | None":
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM cron_runs ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+
+    def get_cron_tenders(self, run_id: int,
+                          site: str = None, keyword: str = None) -> "list[dict]":
+        with self._connect() as conn:
+            q      = "SELECT * FROM cron_tenders WHERE run_id = ?"
+            params: list = [run_id]
+            if site:
+                q += " AND site = ?"
+                params.append(site)
+            if keyword:
+                q += " AND keyword LIKE ?"
+                params.append(f"%{keyword}%")
+            q += " ORDER BY found_at DESC"
+            rows = conn.execute(q, params).fetchall()
+        result = []
+        for r in rows:
+            try:
+                r["fields"] = json.loads(r.get("summary_json") or "{}")
+            except Exception:
+                r["fields"] = {}
+            result.append(r)
+        return result
+
+    def get_cron_dates(self) -> "list[dict]":
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT run_date, status FROM cron_runs ORDER BY run_date DESC LIMIT 90"
+            ).fetchall()
+        seen: dict = {}
+        for r in rows:
+            d, s = r["run_date"], r["status"]
+            if d not in seen or s == "running":
+                seen[d] = s
+        return [{"date": d, "status": s} for d, s in seen.items()]
+
+    def get_cron_run_by_date(self, date_str: str) -> "dict | None":
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
+                (date_str,),
+            ).fetchone()
+
+    def mark_stale_runs_failed(self) -> int:
+        now = datetime.now().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            cur = conn.execute(
+                """UPDATE cron_runs
+                   SET status='failed', finished_at=?, error_msg='Server restarted mid-run'
+                   WHERE status='running'""",
+                (now,),
+            )
+            # rowcount works the same on both backends
+            return cur._c.rowcount
+
+    def request_cron_stop(self, run_id: int):
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE cron_runs SET stop_requested = 1 WHERE id = ?", (run_id,)
+            )
+
+
+# ── CronDBProxy ────────────────────────────────────────────────────────────────
+
+class CronDBProxy:
+    """Wraps TenderDB so scraper agents use cron-specific dedup tables."""
+
+    def __init__(self, db: TenderDB, run_id: int):
+        self._db    = db
+        self.run_id = run_id
+
+    def is_duplicate(self, title: str, url: str = "") -> bool:
+        return self._db.is_cron_duplicate(title, url)
+
+    def mark_downloaded(self, title: str, url: str, site: str,
+                        keyword: str, published_date: str = ""):
+        self._db.mark_cron_seen(title, url, site, keyword, published_date)

@@ -14,6 +14,6 @@ COPY . .
 # Make the start script executable
 RUN chmod +x entrypoint.sh
 
-EXPOSE 8000
+EXPOSE 8001
 
 CMD ["./entrypoint.sh"]

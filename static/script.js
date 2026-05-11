@@ -1,5 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
-    // Wizard elements
+    // Step elements
     const siteSelect       = document.getElementById('site-select');
     const categorySelect   = document.getElementById('category-select');
     const keywordsInput    = document.getElementById('keywords-input');
@@ -7,10 +7,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const ungmPassword     = document.getElementById('ungm-password');
     const browserToggleRow = document.getElementById('browser-toggle-row');
     const ungmShowBrowser  = document.getElementById('ungm-show-browser');
-    const btnNext          = document.getElementById('btn-next');
-    const btnPrev          = document.getElementById('btn-prev');
     const btnStart         = document.getElementById('btn-start');
-    const progressFill     = document.getElementById('wizard-progress-fill');
+    // legacy refs kept null-safe (removed from HTML)
+    const btnNext = null;
+    const btnPrev = null;
 
     // State panels
     const stateIdle    = document.getElementById('state-idle');
@@ -61,60 +61,44 @@ document.addEventListener('DOMContentLoaded', () => {
     let stepGoneTimers  = {};
     let thoughtTimer    = null;
 
-    // ── Wizard Navigation ──────────────────────────────────────────────────
+    // ── Step 2 lock/unlock based on selected site ─────────────────────────
 
-    let currentStep = 1;
-    let activeSteps = [1, 2, 3];
+    const step2Card      = document.getElementById('step-card-2');
+    const step2NoAuth    = document.getElementById('step2-no-auth');
+    const step2AuthFields = document.getElementById('step2-auth-fields');
+    const step2SiteName  = document.getElementById('step2-site-name');
+    const step2LockIcon  = document.getElementById('step2-lock-icon');
+    const step2Num       = document.getElementById('step2-num');
 
-    function updateWizardUI() {
-        const site = siteSelect.value;
-        activeSteps = site === 'ungm' ? [1, 2, 3] : [1, 3];
-        browserToggleRow.classList.toggle('hidden', site !== 'ungm');
+    const SITES_REQUIRING_AUTH = new Set(['ungm']);
 
-        [1, 2, 3].forEach(n => {
-            const el = document.getElementById(`wizard-step-${n}`);
-            if (el) el.classList.toggle('active', n === activeSteps[currentStep - 1]);
-        });
+    function updateStep2(site) {
+        const needsAuth = SITES_REQUIRING_AUTH.has(site);
+        const siteLabel = site
+            ? (site === 'ungm' ? 'UNGM (UN Global Marketplace)' : site.toUpperCase())
+            : '—';
 
-        const pct = ((currentStep - 1) / (activeSteps.length - 1)) * 100;
-        progressFill.style.width = `${pct}%`;
+        if (needsAuth) {
+            step2Card.classList.remove('step-card-locked');
+            step2NoAuth.classList.add('hidden');
+            step2AuthFields.classList.remove('hidden');
+            if (step2LockIcon) step2LockIcon.textContent = '🔓';
+            if (step2Num) step2Num.classList.remove('step-num-locked');
+        } else {
+            step2Card.classList.add('step-card-locked');
+            step2AuthFields.classList.add('hidden');
+            step2NoAuth.classList.remove('hidden');
+            if (step2SiteName) step2SiteName.textContent = siteLabel;
+            if (step2LockIcon) step2LockIcon.textContent = '🔒';
+            if (step2Num) step2Num.classList.add('step-num-locked');
+        }
 
-        const indicators = document.querySelectorAll('.wizard-steps-indicator .indicator:not(.line)');
-        const lines = document.querySelectorAll('.wizard-steps-indicator .indicator.line');
-
-        indicators.forEach((ind, idx) => {
-            const logicalStep = idx + 1;
-            ind.classList.remove('active', 'done');
-            const ai = activeSteps.indexOf(logicalStep);
-            if (ai === -1) {
-                ind.style.opacity = '0.3';
-            } else {
-                ind.style.opacity = '1';
-                if (ai + 1 === currentStep) ind.classList.add('active');
-                else if (ai + 1 < currentStep) ind.classList.add('done');
-            }
-        });
-
-        lines.forEach((line, idx) => {
-            line.classList.toggle('done', currentStep > idx + 1);
-        });
-
-        btnPrev.classList.toggle('hidden', currentStep === 1);
-        btnNext.classList.toggle('hidden', currentStep === activeSteps.length);
-        btnStart.classList.toggle('hidden', currentStep !== activeSteps.length);
+        if (browserToggleRow) {
+            browserToggleRow.classList.toggle('hidden', site !== 'ungm');
+        }
     }
 
-    siteSelect.addEventListener('change', () => {
-        if (siteSelect.value !== 'ungm' && activeSteps[currentStep - 1] === 2) currentStep = 2;
-        updateWizardUI();
-    });
-
-    btnNext.addEventListener('click', () => {
-        if (currentStep < activeSteps.length) { currentStep++; updateWizardUI(); }
-    });
-    btnPrev.addEventListener('click', () => {
-        if (currentStep > 1) { currentStep--; updateWizardUI(); }
-    });
+    siteSelect.addEventListener('change', () => updateStep2(siteSelect.value));
 
     fetch('/config')
         .then(res => res.json())
@@ -128,7 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
             categorySelect.innerHTML += Object.keys(serverKeywords)
                 .map(k => `<option value="${k}">${k}</option>`).join('');
             siteSelect.value = data.sites[0];
-            updateWizardUI();
+            updateStep2(siteSelect.value);
         });
 
     categorySelect.addEventListener('change', () => {
@@ -377,9 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const email = ungmEmail.value.trim();
             const password = ungmPassword.value;
             if (!email || !password) {
-                alert('Please enter your UNGM email and password.');
-                currentStep = activeSteps.indexOf(2) + 1;
-                updateWizardUI();
+                alert('Please enter your UNGM email and password in Step 2.');
                 return;
             }
             credentials = { email, password, show_browser: ungmShowBrowser.checked };
@@ -415,7 +397,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // Switch to running state
         btnStart.disabled = true;
         btnStart.innerHTML = 'Starting… <span>⏳</span>';
-        btnPrev.disabled = true;
 
         stateIdle.classList.remove('active');
         stateDone.classList.remove('active');
@@ -571,7 +552,6 @@ document.addEventListener('DOMContentLoaded', () => {
         function resetStartBtn() {
             btnStart.disabled = false;
             btnStart.innerHTML = 'Start Extraction <span>🚀</span>';
-            btnPrev.disabled = false;
         }
     });
 });

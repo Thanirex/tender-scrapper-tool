@@ -1,196 +1,329 @@
-# Tender Scrapper
+# TAiQ — Tender AI Intelligence Platform
 
-Agentic tender intelligence tool. Scrapes procurement notices from configured websites, downloads attached documents, and uses an LLM to extract structured summaries into Excel or Word reports — all from a browser UI with a live log feed.
+**TAiQ** is a full-stack procurement intelligence platform that autonomously monitors tender portals, analyses opportunities with a large language model, and surfaces structured intelligence to your team — all from a role-gated web dashboard.
+
+It started as a scraper. It became an autonomous agent with a command centre.
 
 ---
 
-## Supported Sites
+## What it does
 
-| Site | Output | Auth required |
-|------|--------|---------------|
-| **UNGM** (UN Global Marketplace) | Word `.docx` report | Yes — UNGM account, entered per session |
-| **NGOBox** | Excel `.xlsx` report | No |
-| **DevNet** | Excel `.xlsx` report | No |
+| Capability | Description |
+|---|---|
+| **Autonomous daily agent** | TAiQ runs at 07:00 IST every day without human intervention — scraping every configured site across every keyword, analysing each tender with Gemini, and populating the database before your team's morning standup |
+| **Multi-site scraping** | UNGM (UN Global Marketplace, auth-based), DevNet, NGOBox — new sites added via a JSON config, no code changes |
+| **LLM extraction** | 26-field structured Level 1 analysis per tender: reference, deadline, scope, eligibility, budget, selection criteria, consortium rules, clarification contacts, and more |
+| **Confidence-graded output** | Every field is tagged `[VERIFIED]` (scraped from HTML ground truth), `[EXTRACTED]` (found by LLM in documents), `[NOT_FOUND]`, or `[MISMATCH: HIGH PRIORITY ERROR]` when a verified field contradicts attached documents |
+| **Document intelligence** | Downloads all PDF, DOCX, and XLSX attachments per tender; extracts text from all of them before the LLM sees the bundle |
+| **Manual scraping** | Any authorised user can trigger a targeted scrape — choose site, keyword category or custom keywords, and watch a live log stream |
+| **Excel reports** | Level 1 Excel report generated per tender run, downloadable from the dashboard |
+| **Dashboard with calendar** | Select any historical date; see run activity, per-site tender counts, proportional bar charts, and the full tender grid with keyword and site filters |
+| **Role-based access control** | Three roles — `user` (read-only), `admin` (scrape + dashboard), `superadmin` (user management, audit log, stop TAiQ mid-run) |
+| **Audit trail** | Every login, scrape, and admin action is logged with timestamp and user |
+| **Zero-credential storage** | UNGM login credentials for manual scrapes are never persisted — used in-session only |
+| **Docker-native** | Single `docker compose up` command; all data persisted to a named volume |
 
 ---
 
 ## Architecture
 
 ```
-Browser UI  (static/index.html + script.js + style.css)
-      │  WebSocket  /ws/scrape
-      ▼
-FastAPI server  (api.py)
-      │
-      ├── ScraperAgent          agents/scraper_agent.py
-      │     Playwright headless → ngobox / devnet
-      │     keyword search → page text → .txt files → Excel report
-      │
-      ├── UNGMScraperAgent      agents/ungm_scraper_agent.py
-      │     Playwright (headless or visible) → ungm.org
-      │     Login → active-only filter → keyword search (cap: 10 tenders/keyword)
-      │     → scrapes verified fields from span.label HTML elements (ground truth)
-      │     → downloads all PDF / DOCX / XLSX attachments per tender
-      │
-      ├── FileReader             agents/file_reader.py
-      │     PDF (pdfplumber — text + table rows), DOCX, XLSX, TXT
-      │
-      ├── SummarizerAgent        agents/summarizer_agent.py
-      │     Groq API  llama-3.3-70b-versatile
-      │     Input: labeled text bundle (28 000 char cap on free tier)
-      │     Output: 5-field summary with confidence markers per field
-      │       [VERIFIED]  /  [EXTRACTED]  /  [NOT_FOUND]  /  [MISMATCH: HIGH PRIORITY ERROR]
-      │
-      └── DocWriter              agents/doc_writer.py       ← UNGM
-          ExcelWriter (inline)   api.py                     ← ngobox / devnet
-```
-
-### UNGM data flow
-
-```
-Login
-  → per keyword:
-      check Active-only filter → type keyword → click Search
-      → collect up to 10 tender URLs from #tblNotices
-      → for each tender:
-            scrape span.label fields (Reference, Deadline on, Published on, …)
-            scrape full page body text
-            download all DownloadDocument attachments
-              (each file opened in a separate browser page so main page stays alive)
-            read each file with FileReader (text + tables)
-      → build labeled text bundle sent to LLM:
-            === VERIFIED FIELDS ===         ← LLM must treat as ground truth
-            === UNGM NOTICE PAGE TEXT ===
-            === ATTACHED DOCUMENT: name === ← one section per file
-  → summarize (Groq, 28 000 char cap, auto-retry on rate limit)
-  → write Word report  data/outputs/UNGM_Report_<timestamp>.docx
+Browser  (login → dashboard → TAiQ work → users → audit)
+    │  REST + WebSocket
+    ▼
+FastAPI  (api.py)
+    │
+    ├── Auth          JWT RS256 · bcrypt · 7-day tokens · role middleware
+    │
+    ├── Manual scrape  WebSocket /ws/scrape
+    │     ScraperAgent      → DevNet / NGOBox  (Playwright, CSS-selector config)
+    │     UNGMScraperAgent  → UNGM             (Playwright + login + attachment download)
+    │     FileReader        → PDF / DOCX / XLSX / TXT
+    │     SummarizerAgent   → Gemini (gemma-4-31b-it), 500k char window, retry on 429
+    │     ExcelWriter       → Level 1 .xlsx per run
+    │
+    ├── TAiQ autonomous agent  (cron_runner.py)
+    │     APScheduler CronTrigger 07:00 IST
+    │     Phase 1: UNGM  (UNGMScraperAgent, all keywords)
+    │     Phase 2+: standard sites from sites_config.json (ScraperAgent, per keyword)
+    │     CronDBProxy    dedup — skips tenders already seen this run
+    │     Live log buffer (in-memory during run, written to disk after)
+    │     Stop signal    superadmin can halt mid-run from dashboard
+    │
+    ├── Dashboard API   /dashboard/stats · /dashboard/tenders · /dashboard/dates
+    │     Merges manual sessions + TAiQ cron runs into a unified timeline
+    │
+    ├── TAiQ API        /taiq/status · /taiq/run · /taiq/stop · /taiq/logs
+    │
+    ├── Admin API       user CRUD · role changes
+    │
+    └── Superadmin API  audit log · platform-wide controls
+    
+SQLite  (tender_tracker.db)
+    tables: users · sessions · found_tenders · cron_runs · cron_tenders · audit_log
 ```
 
 ---
 
-## Setup
+## Roles
 
-### 1. Prerequisites
+| Role | Can do |
+|---|---|
+| `user` | View dashboard, filter tenders |
+| `admin` | All of `user` + trigger manual scrapes, view live logs, download reports |
+| `superadmin` | All of `admin` + manage users, view audit log, stop TAiQ mid-run |
 
-- Python 3.11+
-- A [Groq](https://console.groq.com) account (free tier works for light use — see limits below)
-- A UNGM vendor account if scraping UNGM
+The first `superadmin` is seeded from environment variables on startup. All subsequent users are created by a superadmin from the Users page.
 
-### 2. Install dependencies
+---
 
-```bash
-pip install -r requirements.txt
-playwright install chromium
-```
-
-With `uv`:
+## Quick start (Docker)
 
 ```bash
-uv pip install -r requirements.txt
-playwright install chromium
+# 1. Copy and fill in credentials
+cp .env.example .env
+# Edit .env — set GEMINI_API_KEY, UNGM_EMAIL, UNGM_PASSWORD, JWT_SECRET_KEY, SUPERADMIN_PASSWORD
+
+# 2. Build and start
+docker compose up -d
+
+# 3. Open
+open http://localhost:8001
 ```
 
-### 3. Environment variables
+Log in with the superadmin credentials you set in `.env`. TAiQ will fire its first run automatically if it is past 07:00 IST.
 
-Create `.env` in the project root:
+---
 
-```
-GEMINI_API_KEY= paste_your_key_here
-```
+## Environment variables
 
-### 4. Configuration files
+| Variable | Required | Description |
+|---|---|---|
+| `GEMINI_API_KEY` | Yes | Google AI Studio key — used for all LLM summarisation |
+| `UNGM_EMAIL` | Yes (for UNGM) | UNGM vendor portal login email |
+| `UNGM_PASSWORD` | Yes (for UNGM) | UNGM vendor portal password |
+| `JWT_SECRET_KEY` | **Yes in prod** | Secret for signing JWTs — use a long random string |
+| `SUPERADMIN_USERNAME` | No | Username for the seeded superadmin (default: `superadmin`) |
+| `SUPERADMIN_EMAIL` | No | Email for the seeded superadmin |
+| `SUPERADMIN_PASSWORD` | No | Password for the seeded superadmin (default: `changeme123` — change this) |
+| `TENDER_DATA_DIR` | No | Override data directory (default: `~/Documents/Tender Scrapping Documents`) — set to `/data` in Docker |
 
-**`sites_config.json`** — CSS selector config per site. UNGM is built in. Add ngobox / devnet entries with their selectors:
+---
+
+## Adding a new site
+
+Edit `sites_config.json`:
 
 ```json
 {
   "ungm":   { "url": "https://www.ungm.org", "requires_auth": true },
-  "ngobox": { "url": "...", "search_input_selector": "...", "search_button_selector": "...", "results_link_selector": "...", "tender_title_selector": "...", "tender_description_selector": "..." }
+  "devnet": {
+    "url": "https://...",
+    "search_input_selector": "input#search",
+    "search_button_selector": "button[type=submit]",
+    "results_link_selector": "a.tender-link",
+    "tender_title_selector": "h1.tender-title",
+    "tender_description_selector": "div.tender-body"
+  }
 }
 ```
 
-**`Keywords.json`** — keyword categories for the UI dropdown:
+Any site without `"requires_auth": true` is picked up by the autonomous TAiQ agent automatically on the next run — no code changes needed.
+
+---
+
+## Keyword categories
+
+Edit `Keywords.json`:
 
 ```json
 {
-  "E-Learning": ["Learning Management System (LMS)", "eLearning Platform", "..."],
-  "Analytics":  ["Dashboard", "Data Visualization", "..."]
+  "E-Learning": ["Learning Management System", "LMS", "eLearning Platform"],
+  "Analytics":  ["Dashboard", "Data Visualization", "Business Intelligence"]
 }
 ```
 
-### 5. Run
+Categories appear in the manual scrape UI dropdown. All keywords across all categories are used by the TAiQ daily agent.
 
-**Option A — double-click (recommended for most users):**
+---
 
-Double-click `launch.bat`. It starts the server and opens your browser automatically.
+## Data directory layout
 
-**Option B — terminal:**
-
-```bash
-python launch.py
+```
+$TENDER_DATA_DIR/
+  tender_tracker.db                       SQLite database
+  cron_logs/
+    run_<id>.log                          Full log for each TAiQ run
+  downloads/
+    cron/
+      cron_<timestamp>/
+        ungm/
+          <keyword>/
+            <tender_title>/               Attachments (PDF, DOCX, XLSX)
+            Level1_<title>.xlsx           Level 1 analysis
+        devnet/  ngobox/ ...              Same structure per site
+    <site>/
+      <keyword>_<n>_<title>.txt           Raw page text (manual runs)
+  outputs/
+    Scrape_Results_<timestamp>.xlsx       Manual run Excel reports
 ```
 
-**Option C — developer mode (auto-reload on code changes):**
+---
+
+## Local development
 
 ```bash
-uvicorn api:app --reload
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium
+
+cp .env.example .env               # fill in your keys
+
+uvicorn api:app --reload --port 8001
 ```
 
-Open `http://localhost:8000`.
+Open `http://localhost:8001`.
 
 ---
 
-## Using the UI
+## Database
 
-1. **Select target website** from the dropdown.
-2. **UNGM only:** enter your UNGM email and password. Credentials are used only for the current session — never stored. Enable "Show live browser on screen" to watch Chromium navigate in real time.
-3. **Select keyword category** from the dropdown (pre-filled from `Keywords.json`), or type custom keywords comma-separated in the text area.
-4. Click **Start Scraping**. The live terminal streams every action in real time.
-5. When scraping finishes, click **Download Report** to save the output.
+TAiQ defaults to **SQLite** — a single file stored inside the Docker volume at `$TENDER_DATA_DIR/tender_tracker.db`. This is production-ready for single-server deployments and requires zero setup.
+
+### Option A — default SQLite (no configuration needed)
+
+```
+TENDER_DATA_DIR=/data          # already set in .env.example
+# DATABASE_URL not set         # TAiQ uses SQLite at /data/tender_tracker.db
+```
+
+The file is in a named Docker volume (`taiq-data`). Back it up with:
+
+```bash
+docker run --rm -v taiq-data:/data -v $(pwd):/backup alpine \
+  tar czf /backup/taiq-backup.tar.gz /data
+```
+
+### Option B — point SQLite at a network share
+
+If your company has a shared NFS/SMB mount you want the data on:
+
+```
+DATABASE_URL=sqlite:////mnt/company-share/taiq/taiq.db
+```
+
+SQLite works fine over network storage as long as only one TAiQ instance writes at a time (which is the normal single-container setup).
+
+### Option C — connect to your company's PostgreSQL server
+
+1. Create a database and user on your PostgreSQL server:
+
+```sql
+CREATE DATABASE taiq_db;
+CREATE USER taiq_user WITH PASSWORD 'strong-password-here';
+GRANT ALL PRIVILEGES ON DATABASE taiq_db TO taiq_user;
+```
+
+2. Run the schema file (once) to create all tables:
+
+```bash
+psql -U taiq_user -d taiq_db -f schema.sql
+```
+
+3. Set `DATABASE_URL` in your `.env`:
+
+```
+DATABASE_URL=postgresql://taiq_user:strong-password-here@db-server.company.com:5432/taiq_db
+```
+
+4. Add the PostgreSQL driver to `requirements.txt`:
+
+Uncomment this line in `requirements.txt`:
+```
+psycopg2-binary
+```
+
+Then rebuild the Docker image:
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+TAiQ will connect to PostgreSQL on startup — no code changes needed.
+
+### Schema reference
+
+All tables are defined in `schema.sql`. The main ones:
+
+| Table | Contents |
+|---|---|
+| `users` | Accounts, roles, bcrypt password hashes |
+| `search_sessions` | One row per manual scrape run |
+| `found_tenders` | Tenders discovered by manual scrapes |
+| `cron_runs` | One row per TAiQ autonomous agent run |
+| `cron_tenders` | Tenders discovered by TAiQ |
+| `cron_dedup` | Cross-run deduplication index for TAiQ |
+| `activity_logs` | Audit trail — every login, scrape, and admin action |
 
 ---
-
-## Output files
-
-All output is saved to `Documents\Tender Scrapping Documents\` in your Windows user profile — regardless of where the app is installed.
-
-| Path | Contents |
-|------|----------|
-| `~/Documents/Tender Scrapping Documents/outputs/UNGM_Report_<timestamp>.docx` | Word report — one section per tender, 5 fields with colour-coded confidence badges |
-| `~/Documents/Tender Scrapping Documents/outputs/Scrape_Results_<timestamp>.xlsx` | Excel report — ngobox / devnet results |
-| `~/Documents/Tender Scrapping Documents/downloads/ungm/<timestamp>/<keyword>/<title>/` | Raw attachments downloaded per tender |
-| `~/Documents/Tender Scrapping Documents/downloads/<site>/<keyword>_<n>_<title>.txt` | Raw page text for ngobox / devnet |
-
----
-
-## UNGM Word report — field confidence badges
-
-| Badge | Colour | Meaning |
-|-------|--------|---------|
-| `[✓ VERIFIED]` | Green | Value scraped directly from UNGM HTML — ground truth |
-| `[~ EXTRACTED]` | Blue | Found in notice page text or attached documents by LLM |
-| `[✗ NOT FOUND]` | Red italic | Genuinely absent from all content provided |
-| `[⚠ MISMATCH: HIGH PRIORITY ERROR]` | Bold red | VERIFIED field contradicts the attached documents — both values quoted |
-
-**Deadline** is always sourced from the `Deadline on` label on the UNGM page (VERIFIED), never inferred by the LLM. If a document states a different date, a MISMATCH flag is raised.
 
 ## Project structure
 
 ```
-api.py                          FastAPI server + WebSocket endpoint
+api.py                      FastAPI app, static routes, superadmin seed
+auth.py                     JWT encode/decode, bcrypt, role middleware
+db.py                       TenderDB (SQLite + PostgreSQL via DATABASE_URL), CronDBProxy
+schema.sql                  PostgreSQL DDL — run once to set up an existing PG database
+cron_runner.py              TAiQ autonomous agent, APScheduler, stop signal
+date_utils.py               IST-aware date helpers
+paths.py                    Centralised path config, TENDER_DATA_DIR support
+
 agents/
-  scraper_agent.py              NGOBox / DevNet Playwright scraper
-  ungm_scraper_agent.py         UNGM Playwright scraper
-  file_reader.py                PDF / DOCX / XLSX / TXT text extractor
-  summarizer_agent.py           Groq LLM wrapper + retry logic
-  doc_writer.py                 Word report generator
+  scraper_agent.py          Playwright scraper for DevNet / NGOBox
+  ungm_scraper_agent.py     Playwright scraper for UNGM (auth + attachments)
+  file_reader.py            PDF / DOCX / XLSX / TXT text extractor
+  summarizer_agent.py       Gemini LLM wrapper, Level 1 field extraction
+  excel_writer.py           Level 1 .xlsx report generator
+  doc_writer.py             Word .docx report generator (UNGM manual runs)
+
+routers/
+  auth_router.py            /auth/login, /auth/me
+  admin_router.py           /scrape, /ws/scrape, /download/*
+  dashboard_router.py       /dashboard/stats, /tenders, /dates
+  taiq_router.py            /taiq/status, /run, /stop, /logs, /history
+  superadmin_router.py      /admin/users, /audit
+
 static/
-  index.html                    Browser UI
-  script.js                     WebSocket client + UI logic
-  style.css                     Dark glassmorphism theme
-sites_config.json               Selector config per site
-Keywords.json                   Keyword categories for UI dropdown
-.env                            GROQ_API_KEY (not committed)
-requirements.txt                Python dependencies
-FUTURE_VERSIONS.md              Expansion roadmap and current limitations
+  login.html / auth.js      Login page + JWT storage
+  nav.js                    Shared nav bar, role-aware links
+  index.html / script.js    Manual scrape UI
+  dashboard.html / .js      Analytics dashboard with calendar
+  taiq.html / taiq.js       TAiQ work page — history, logs, run controls
+  users.html / users.js     User management (superadmin)
+  audit.html / audit.js     Audit log viewer (superadmin)
+  style.css                 Dark glassmorphism design system
+
+sites_config.json           Site selector config — add new sites here
+Keywords.json               Keyword categories for the scrape UI
+Dockerfile
+docker-compose.yml
+entrypoint.sh
+.env.example
 ```
+
+---
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Backend | Python 3.12 · FastAPI · Uvicorn |
+| Browser automation | Playwright (Chromium headless) |
+| LLM | Google Gemini — `gemma-4-31b-it` |
+| Scheduling | APScheduler (CronTrigger) |
+| Database | SQLite via Python stdlib |
+| Auth | JWT (`python-jose`) · bcrypt |
+| Document parsing | pdfplumber · python-docx · openpyxl |
+| Container | Docker · Docker Compose |
+| Frontend | Vanilla JS · CSS custom properties (no build step) |

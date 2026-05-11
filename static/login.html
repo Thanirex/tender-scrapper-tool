@@ -42,8 +42,13 @@
 
     <script src="/static/auth.js"></script>
     <script>
-        // If already logged in, redirect
-        if (getUser()) window.location.href = '/';
+        // If already logged in, redirect to the right page
+        function postLoginRedirect() {
+            const u = getUser();
+            if (!u) return;
+            window.location.href = (u.role === 'admin' || u.role === 'superadmin') ? '/dashboard' : '/';
+        }
+        postLoginRedirect();
 
         document.getElementById('login-form').addEventListener('submit', async (e) => {
             e.preventDefault();
@@ -71,7 +76,7 @@
                     return;
                 }
                 setToken(data.access_token);
-                window.location.href = '/';
+                postLoginRedirect();
             } catch {
                 errorEl.textContent = 'Could not connect to the server.';
                 errorEl.classList.remove('hidden');

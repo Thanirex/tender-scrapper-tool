@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TAiQ — Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=14">
+    <link rel="stylesheet" href="/static/style.css?v=16">
 </head>
 <body>
     <div class="app-background"></div>
@@ -29,14 +29,31 @@
             </div>
         </div>
 
-        <!-- Stats row -->
-        <div class="stats-row" id="stats-row">
-            <div class="stat-card stat-placeholder">Loading…</div>
+        <!-- TAiQ status widget -->
+        <div class="dash-taiq-card" id="dash-taiq-card">
+            <div class="dtc-left">
+                <span class="dtc-dot dtc-dot-idle" id="dtc-dot"></span>
+                <span class="dtc-robot">🤖</span>
+                <div class="dtc-text">
+                    <strong>TAiQ Work</strong>
+                    <span id="dtc-desc">Checking…</span>
+                </div>
+            </div>
+            <div class="dtc-right">
+                <div class="dtc-pills" id="dtc-pills"></div>
+                <a href="/taiq-work" class="dtc-view-btn">View Details →</a>
+            </div>
         </div>
+
+        <!-- Stats row -->
+        <div class="stats-row" id="stats-row"></div>
+
+        <!-- Summary sentence -->
+        <p class="dash-summary-sentence" id="dash-summary"></p>
 
         <!-- Main split -->
         <div class="dash-grid">
-            <!-- Calendar -->
+            <!-- Calendar + glance -->
             <div class="calendar-panel">
                 <div class="calendar-header">
                     <button class="cal-nav-btn" id="cal-prev">&#8592;</button>
@@ -48,6 +65,7 @@
                     <span>Th</span><span>Fr</span><span>Sa</span><span>Su</span>
                 </div>
                 <div class="cal-grid" id="cal-grid"></div>
+                <div id="side-breakdown-panel"></div>
             </div>
 
             <!-- Content -->

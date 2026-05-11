@@ -1,6 +1,5 @@
 playwright
 google-generativeai
-# groq
 openpyxl
 python-dotenv
 pdfplumber
@@ -12,3 +11,7 @@ jinja2
 python-multipart
 python-jose[cryptography]
 bcrypt
+apscheduler
+pytz
+# Uncomment the line below to use PostgreSQL instead of SQLite:
+# psycopg2-binary

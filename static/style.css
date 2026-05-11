@@ -55,7 +55,9 @@ body {
 
 /* Utilities */
 .mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
 .mt-4 { margin-top: 1.5rem; }
+.mb-3 { margin-bottom: 1rem; }
 .hidden { display: none !important; }
 
 /* =============================================
@@ -1213,11 +1215,153 @@ details.advanced-settings summary {
    STATS ROW (dashboard)
    ============================================= */
 .stats-row {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.8rem;
+    margin-bottom: 0.65rem;
 }
+
+/* ── v2 stat cards ───────────────────────────────────────────────────────── */
+.stat-card-v2 {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 0.95rem 1.1rem 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    box-shadow: var(--shadow-sm);
+    position: relative;
+    overflow: hidden;
+}
+.stat-card-v2::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+.scard-total::after  { background: #27272a; }
+.scard-ungm::after   { background: #f59e0b; }
+.scard-devnet::after { background: #3b82f6; }
+.scard-ngobox::after { background: #10b981; }
+.scard-taiq::after   { background: #7c3aed; }
+.scard-runs::after   { background: #64748b; }
+
+.sc2-icon { font-size: 1.15rem; line-height: 1; margin-bottom: 0.1rem; }
+
+.sc2-num {
+    font-size: 1.95rem;
+    font-weight: 800;
+    letter-spacing: -1.5px;
+    color: var(--text-main);
+    line-height: 1;
+}
+.sc2-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.sc2-bar-track {
+    height: 3px;
+    background: var(--border);
+    border-radius: 9999px;
+    overflow: hidden;
+    margin-top: 0.45rem;
+}
+.sc2-bar-fill {
+    height: 100%;
+    border-radius: 9999px;
+    transition: width 0.6s ease;
+}
+.scard-total  .sc2-bar-fill { background: #27272a; }
+.scard-ungm   .sc2-bar-fill { background: #f59e0b; }
+.scard-devnet .sc2-bar-fill { background: #3b82f6; }
+.scard-ngobox .sc2-bar-fill { background: #10b981; }
+.scard-taiq   .sc2-bar-fill { background: #7c3aed; }
+.scard-runs   .sc2-bar-fill { background: #64748b; }
+
+/* ── Summary sentence ────────────────────────────────────────────────────── */
+.dash-summary-sentence {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-bottom: 1.1rem;
+    min-height: 1.1em;
+    padding: 0 0.1rem;
+}
+.dash-summary-sentence strong {
+    color: var(--text-main);
+    font-weight: 700;
+}
+
+/* ── Side breakdown panel (inside calendar panel) ────────────────────────── */
+#side-breakdown-panel {
+    margin-top: 1.1rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+}
+.sbd-title {
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin-bottom: 0.7rem;
+}
+.sbd-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.55rem;
+}
+.sbd-site-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    width: 46px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+.sbd-bar-track {
+    flex: 1;
+    height: 7px;
+    background: var(--border);
+    border-radius: 9999px;
+    overflow: hidden;
+}
+.sbd-bar-fill { height: 100%; border-radius: 9999px; transition: width 0.55s ease; }
+.sbd-count {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: var(--text-main);
+    width: 20px;
+    text-align: right;
+    flex-shrink: 0;
+}
+.sbd-footer {
+    margin-top: 0.55rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+.sbd-empty { font-size: 0.75rem; color: var(--text-light); text-align: center; padding: 0.4rem 0; }
+
+/* ── Nicer empty states ───────────────────────────────────────────────────── */
+.dash-empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 2.5rem 1rem;
+    color: var(--text-light);
+}
+.des-icon  { font-size: 1.9rem; }
+.des-title { font-size: 0.88rem; font-weight: 600; color: var(--text-muted); }
+.des-sub   { font-size: 0.76rem; }
 
 .stat-card {
     background: var(--surface);
@@ -1485,11 +1629,24 @@ details.advanced-settings summary {
 .site-ungm   { background: #fef3c7; color: #92400e; }
 .site-ngobox { background: #d1fae5; color: #065f46; }
 .site-devnet { background: #dbeafe; color: #1e40af; }
+.site-taiq   { background: #ede9fe; color: #4c1d95; }
 /* fallback for unknown sites */
-.site-badge:not([class*='site-ungm']):not([class*='site-ngobox']):not([class*='site-devnet']) {
+.site-badge:not([class*='site-ungm']):not([class*='site-ngobox']):not([class*='site-devnet']):not([class*='site-taiq']) {
     background: var(--primary-light);
     color: var(--primary);
 }
+
+.taiq-source-tag {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.1rem 0.45rem;
+    border-radius: 9999px;
+    background: #ede9fe;
+    color: #4c1d95;
+    white-space: nowrap;
+}
+
+.taiq-activity-row td { background: #faf5ff; }
 
 .kw-tag {
     padding: 0.15rem 0.5rem;
@@ -1817,4 +1974,735 @@ details.advanced-settings summary {
     max-width: 100%;
 }
 .card-file-item a:hover { text-decoration: underline; }
+
+/* ── Scraper: 3-step cards layout ──────────────────────────────────────── */
+.steps-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin-bottom: 1.25rem;
+}
+
+/* Chevron connectors between cards */
+.step-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 36px;
+    color: var(--text-light);
+    position: relative;
+    z-index: 1;
+}
+
+/* ── Individual step card ──────────────────────────────────────────────── */
+.step-card {
+    flex: 1;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.05), 0 1px 3px rgba(0,0,0,0.04);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    position: relative;
+}
+.step-card:not(.step-card-locked):hover {
+    box-shadow: 0 6px 24px rgba(0,0,0,0.09), 0 2px 6px rgba(0,0,0,0.05);
+    transform: translateY(-2px);
+    border-color: #cbd5e1;
+}
+
+/* ── Coloured top accent strip ─────────────────────────────────────────── */
+.step-accent {
+    height: 4px;
+    width: 100%;
+    flex-shrink: 0;
+}
+.step-accent-1 { background: linear-gradient(90deg, #6366f1, #818cf8); }
+.step-accent-2 { background: linear-gradient(90deg, #a855f7, #c084fc); }
+.step-accent-3 { background: linear-gradient(90deg, #10b981, #34d399); }
+
+/* Locked step gets a muted grey accent */
+.step-card-locked .step-accent-2 {
+    background: linear-gradient(90deg, #cbd5e1, #e2e8f0);
+}
+
+/* ── Card header ───────────────────────────────────────────────────────── */
+.step-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 1.1rem 1.4rem 1rem;
+    background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+    border-bottom: 1px solid var(--border);
+}
+
+/* ── Step badge (icon + number pill) ──────────────────────────────────── */
+.step-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 46px;
+    height: 46px;
+    border-radius: 14px;
+    flex-shrink: 0;
+    position: relative;
+}
+.step-badge-1 { background: linear-gradient(135deg, #eef2ff, #e0e7ff); border: 1.5px solid #c7d2fe; }
+.step-badge-2 { background: linear-gradient(135deg, #faf5ff, #f3e8ff); border: 1.5px solid #e9d5ff; }
+.step-badge-3 { background: linear-gradient(135deg, #ecfdf5, #d1fae5); border: 1.5px solid #a7f3d0; }
+
+.step-card-locked .step-badge-2 {
+    background: linear-gradient(135deg, #f8fafc, #f1f5f9);
+    border-color: var(--border);
+}
+
+.step-badge-icon {
+    font-size: 1.35rem;
+    line-height: 1;
+}
+
+/* ── Step title text ───────────────────────────────────────────────────── */
+.step-title-block { flex: 1; }
+.step-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 2px;
+}
+.step-card-1 .step-label { color: #6366f1; }
+.step-card-2 .step-label { color: #a855f7; }
+.step-card-locked.step-card-2 .step-label { color: var(--text-light); }
+.step-card-3 .step-label { color: #10b981; }
+
+.step-title-block h3 {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-main);
+    margin: 0;
+    letter-spacing: -0.01em;
+}
+.step-card-locked .step-title-block h3 { color: var(--text-muted); }
+
+/* ── Card body ─────────────────────────────────────────────────────────── */
+.step-card-body {
+    padding: 1.25rem 1.4rem 1.4rem;
+    flex: 1;
+}
+
+/* ── Locked state ──────────────────────────────────────────────────────── */
+.step-card-locked {
+    background: #fbfcfd;
+}
+.step-card-locked .step-card-body {
+    opacity: 0.75;
+}
+
+.step-no-auth-msg {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--success-text);
+    background: var(--success-light);
+    border: 1px solid #a7f3d0;
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.85rem;
+    margin-bottom: 0.75rem;
+}
+.step-no-auth-msg svg { color: #10b981; flex-shrink: 0; }
+
+.step2-scraping-label {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    margin: 0;
+}
+.step2-scraping-label strong { color: var(--text-main); font-weight: 600; }
+
+/* ── Auth fields secure note ───────────────────────────────────────────── */
+.step2-secure-note {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.75rem;
+    margin-bottom: 0.85rem;
+}
+
+/* ── Small label hint ──────────────────────────────────────────────────── */
+.label-hint {
+    font-size: 0.72rem;
+    color: var(--text-light);
+    font-weight: 400;
+}
+
+/* ── Search launcher ───────────────────────────────────────────────────── */
+.search-launcher {
+    display: flex;
+    justify-content: center;
+    padding: 0.25rem 0 1.5rem;
+}
+.start-btn {
+    padding: 0.8rem 3rem;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    border-radius: 12px;
+    box-shadow: 0 4px 14px rgba(39,39,42,0.18);
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+.start-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 22px rgba(39,39,42,0.22);
+}
+.start-btn:active { transform: translateY(0); }
+
+/* ── Full-width status panel ───────────────────────────────────────────── */
+.status-panel-full {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 2px 12px rgba(0,0,0,0.05);
+    min-height: 160px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+}
+.status-panel-full .state-container {
+    display: none;
+    padding: 2rem 2.25rem;
+}
+.status-panel-full .state-container.active {
+    display: block;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 860px) {
+    .steps-row { flex-direction: column; }
+    .step-connector { width: 100%; height: 28px; transform: rotate(90deg); }
+}
+
+/* =============================================
+   TAiQ WORK PAGE
+   ============================================= */
+
+/* ── Superadmin trigger bar ─────────────────────────────────────────────── */
+.taiq-trigger-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 0.85rem 1.5rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+.ttb-text {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+.ttb-text strong {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+.ttb-text span {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+.ttb-run-btn {
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.45rem 1.1rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+.ttb-run-btn:hover:not(:disabled) { background: var(--primary-hover); }
+.ttb-run-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ── Running banner ────────────────────────────────────────────────────── */
+.taiq-running-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    background: linear-gradient(135deg, #fffbeb, #fef3c7);
+    border: 1.5px solid #fcd34d;
+    border-radius: var(--radius-xl);
+    padding: 1rem 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 12px rgba(245,158,11,0.12);
+}
+.trb-left {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+}
+.trb-pulse {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #f59e0b;
+    flex-shrink: 0;
+    animation: pulse-amber 1.4s ease-in-out infinite;
+}
+@keyframes pulse-amber {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(1.4); }
+}
+.trb-robot { font-size: 1.8rem; line-height: 1; }
+.trb-left strong { font-size: 0.95rem; font-weight: 700; color: #92400e; display: block; }
+.trb-left p { font-size: 0.8rem; color: #b45309; margin: 0; }
+.trb-right {
+    display: flex;
+    gap: 1.5rem;
+    flex-shrink: 0;
+}
+.trb-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.trb-stat-num {
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: #92400e;
+    line-height: 1;
+}
+.trb-stat-label {
+    font-size: 0.7rem;
+    color: #b45309;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.trb-stop-btn {
+    background: #92400e;
+    color: #fef3c7;
+    border: none;
+    border-radius: var(--radius-md);
+    padding: 0.4rem 0.85rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s ease, opacity 0.15s ease;
+    white-space: nowrap;
+    align-self: center;
+}
+.trb-stop-btn:hover:not(:disabled) { background: #78350f; }
+.trb-stop-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Main layout (calendar + right panel) ──────────────────────────────── */
+.taiq-layout {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 1.5rem;
+    align-items: start;
+}
+@media (max-width: 860px) {
+    .taiq-layout { grid-template-columns: 1fr; }
+}
+
+/* ── Calendar panel ─────────────────────────────────────────────────────── */
+.taiq-calendar-panel {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    padding: 1.25rem;
+    position: sticky;
+    top: 80px;
+}
+.taiq-cal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.75rem;
+}
+.taiq-cal-month {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+.taiq-cal-nav {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    font-family: inherit;
+}
+.taiq-cal-nav:hover { background: var(--bg-color); color: var(--text-main); }
+
+.taiq-cal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    margin-bottom: 0.35rem;
+}
+.taiq-cal-weekdays span {
+    text-align: center;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--text-light);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.2rem 0;
+}
+
+.taiq-cal-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 2px;
+}
+.taiq-cal-day {
+    position: relative;
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border-radius: 8px;
+    cursor: default;
+    color: var(--text-main);
+    transition: background 0.15s;
+    flex-direction: column;
+    gap: 2px;
+}
+.taiq-cal-empty { background: none !important; cursor: default; }
+.taiq-cal-future { color: var(--text-light); }
+.taiq-cal-today {
+    background: var(--primary-light);
+    font-weight: 700;
+    color: var(--primary);
+}
+.taiq-cal-has-data { cursor: pointer; }
+.taiq-cal-has-data:hover { background: #f1f5f9; }
+.taiq-cal-selected {
+    background: var(--primary) !important;
+    color: white !important;
+    font-weight: 700;
+}
+.taiq-cal-selected .taiq-cal-dot { background: white !important; opacity: 0.8; }
+
+.taiq-cal-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.dot-complete { background: #10b981; }
+.dot-failed   { background: #ef4444; }
+.dot-stopped  { background: #8b5cf6; }
+.dot-running  { background: #f59e0b; animation: pulse-amber 1.4s ease-in-out infinite; }
+
+.taiq-cal-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-top: 0.85rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    flex-wrap: wrap;
+}
+.cal-legend-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+
+/* ── Right panel ────────────────────────────────────────────────────────── */
+.taiq-right-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-height: 300px;
+}
+
+.taiq-empty-state {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 3rem 2rem;
+    text-align: center;
+    box-shadow: var(--shadow-sm);
+}
+.taiq-empty-icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+.taiq-empty-state h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; }
+.taiq-empty-state p { font-size: 0.85rem; color: var(--text-muted); max-width: 320px; margin: 0 auto; }
+
+/* ── Run summary card ───────────────────────────────────────────────────── */
+.taiq-run-summary {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 1.25rem 1.5rem;
+    box-shadow: var(--shadow-sm);
+}
+.trs-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 1rem;
+}
+.trs-date {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-main);
+}
+.trs-stats {
+    display: flex;
+    gap: 2rem;
+}
+.trs-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+.trs-stat-num {
+    font-size: 1.3rem;
+    font-weight: 800;
+    color: var(--text-main);
+    line-height: 1;
+}
+.trs-stat-lbl {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.trs-error {
+    margin-top: 0.75rem;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #dc2626;
+    font-size: 0.82rem;
+    padding: 0.6rem 0.9rem;
+    border-radius: var(--radius-md);
+}
+
+/* ── Filter row (TAiQ tenders) ──────────────────────────────────────────── */
+.taiq-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.results-count-lbl {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    margin-left: auto;
+}
+
+/* status-badge danger variant */
+.status-badge.danger {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* status-badge stopped variant */
+.status-badge.stopped {
+    background: #ede9fe;
+    color: #5b21b6;
+}
+
+/* ── Dashboard TAiQ status card ─────────────────────────────────────────── */
+.dash-taiq-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 0.7rem 1.25rem;
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+.dtc-left {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex: 1;
+    min-width: 0;
+}
+.dtc-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.dtc-dot-idle     { background: #94a3b8; }
+.dtc-dot-running  { background: #22c55e; animation: dtc-pulse 1.2s ease-in-out infinite; }
+.dtc-dot-complete { background: #22c55e; }
+.dtc-dot-failed   { background: #ef4444; }
+.dtc-dot-stopped  { background: #a855f7; }
+@keyframes dtc-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.45; transform: scale(0.8); }
+}
+.dtc-robot { font-size: 1.1rem; flex-shrink: 0; }
+.dtc-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 1px;
+}
+.dtc-text strong {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: var(--text-main);
+    line-height: 1.2;
+}
+.dtc-text span {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 480px;
+}
+.dtc-right {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    flex-shrink: 0;
+}
+.dtc-pills {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+.dtc-pill {
+    font-size: 0.72rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+}
+.dtc-pill-kw { background: #ede9fe; color: #5b21b6; }
+.dtc-pill-td { background: #dcfce7; color: #15803d; }
+.dtc-view-btn {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--accent, #6366f1);
+    text-decoration: none;
+    white-space: nowrap;
+    padding: 0.28rem 0.7rem;
+    border: 1.5px solid var(--accent, #6366f1);
+    border-radius: var(--radius-sm);
+    transition: background 0.15s, color 0.15s;
+}
+.dtc-view-btn:hover {
+    background: var(--accent, #6366f1);
+    color: #fff;
+}
+
+/* ── TAiQ Logs panel ────────────────────────────────────────────────────── */
+.taiq-logs-card {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+.tlc-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-2, #f8f9fb);
+}
+.tlc-title {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.88rem;
+}
+.tlc-live-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #16a34a;
+    letter-spacing: 0.06em;
+    animation: pulse-opacity 1.4s ease-in-out infinite;
+}
+@keyframes pulse-opacity {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.35; }
+}
+.tlc-toggle-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.7rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.tlc-toggle-btn:hover { background: var(--border); }
+.tlc-body {
+    background: #0f1117;
+    border-radius: 0 0 var(--radius-xl) var(--radius-xl);
+}
+.tlc-lines {
+    display: block;
+    padding: 0.9rem 1rem;
+    margin: 0;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.76rem;
+    line-height: 1.65;
+    color: #c9d1d9;
+    background: transparent;
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+/* Log line colour classes */
+.log-success { color: #4ade80; }
+.log-error   { color: #f87171; }
+.log-warn    { color: #fbbf24; }
+.log-skip    { color: #94a3b8; }
+.log-keyword { color: #818cf8; font-weight: 600; }
+.log-info    { color: #38bdf8; }
+.log-stop    { color: #c084fc; }
+.log-muted   { color: #4b5563; font-style: italic; }
 

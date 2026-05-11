@@ -8,6 +8,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,7 +26,16 @@ load_dotenv(APP_DIR / ".env")
 _init_paths()
 _db = TenderDB(DB_PATH)
 
-app = FastAPI()
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    import cron_runner
+    cron_runner.init_scheduler(_db)
+    yield
+    cron_runner.shutdown_scheduler()
+
+
+app = FastAPI(lifespan=_lifespan)
 app.state.db = _db
 
 # ── Routers ────────────────────────────────────────────────────────────────
@@ -32,11 +43,13 @@ from routers.auth_router import router as auth_router
 from routers.admin_router import router as admin_router
 from routers.dashboard_router import router as dashboard_router
 from routers.superadmin_router import router as superadmin_router
+from routers.taiq_router import router as taiq_router
 
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(dashboard_router)
 app.include_router(superadmin_router)
+app.include_router(taiq_router)
 
 # ── Seed superadmin on first startup ──────────────────────────────────────
 
@@ -82,6 +95,16 @@ async def read_users():
 @app.get("/audit")
 async def read_audit():
     return FileResponse(str(APP_DIR / "static" / "audit.html"))
+
+
+@app.get("/taiq-work")
+async def read_taiq():
+    return FileResponse(str(APP_DIR / "static" / "taiq.html"))
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/config")

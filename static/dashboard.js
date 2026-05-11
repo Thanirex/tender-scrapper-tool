@@ -28,6 +28,72 @@ document.addEventListener('DOMContentLoaded', () => {
         renderCalendar();
     });
     document.getElementById('apply-filter').addEventListener('click', loadTenders);
+    filterSite.addEventListener('change', loadTenders);
+
+    // ── TAiQ status widget ─────────────────────────────────────────────────
+    let taiqPollTimer = null;
+
+    async function loadTaiqStatus() {
+        const res = await authFetch('/taiq/status');
+        if (!res) return;
+        const { run } = await res.json();
+        renderTaiqWidget(run);
+        clearInterval(taiqPollTimer);
+        taiqPollTimer = setInterval(loadTaiqStatus, run && run.status === 'running' ? 8000 : 60000);
+    }
+
+    function renderTaiqWidget(run) {
+        const dot   = document.getElementById('dtc-dot');
+        const desc  = document.getElementById('dtc-desc');
+        const pills = document.getElementById('dtc-pills');
+
+        dot.className = 'dtc-dot';
+
+        if (!run) {
+            dot.classList.add('dtc-dot-idle');
+            desc.textContent = 'No runs recorded yet · Scheduled daily at 7:00 AM IST';
+            pills.innerHTML  = '';
+            return;
+        }
+
+        const isToday = run.run_date === _fmtDate(today);
+        const prefix  = isToday ? 'Today' : _pretty(run.run_date);
+
+        if (run.status === 'running') {
+            dot.classList.add('dtc-dot-running');
+            const curKw = run.current_keyword ? ` · ${run.current_keyword}` : '';
+            desc.textContent = `Running now${curKw}`;
+            pills.innerHTML  = `
+                <span class="dtc-pill dtc-pill-kw">${run.keywords_done || 0} / ${run.total_keywords || '?'} keywords</span>
+                <span class="dtc-pill dtc-pill-td">${run.total_tenders || 0} tenders found</span>`;
+        } else if (run.status === 'complete') {
+            dot.classList.add('dtc-dot-complete');
+            desc.textContent = `${prefix}: Complete`;
+            pills.innerHTML  = `
+                <span class="dtc-pill dtc-pill-kw">${run.keywords_done || 0} / ${run.total_keywords || 0} keywords</span>
+                <span class="dtc-pill dtc-pill-td">${run.total_tenders || 0} tenders</span>
+                <span class="dtc-pill">${_duration(run.started_at, run.finished_at)}</span>`;
+        } else if (run.status === 'failed') {
+            dot.classList.add('dtc-dot-failed');
+            const errShort = run.error_msg
+                ? run.error_msg.substring(0, 70) + (run.error_msg.length > 70 ? '…' : '')
+                : 'Unknown error';
+            desc.textContent = `${prefix}: Failed — ${errShort}`;
+            pills.innerHTML  = '';
+        } else if (run.status === 'stopped') {
+            dot.classList.add('dtc-dot-stopped');
+            desc.textContent = `${prefix}: Stopped`;
+            pills.innerHTML  = `
+                <span class="dtc-pill dtc-pill-kw">${run.keywords_done || 0} / ${run.total_keywords || 0} keywords</span>
+                <span class="dtc-pill dtc-pill-td">${run.total_tenders || 0} tenders</span>`;
+        } else {
+            dot.classList.add('dtc-dot-idle');
+            desc.textContent = `${prefix}: ${run.status}`;
+            pills.innerHTML  = '';
+        }
+    }
+
+    loadTaiqStatus();
 
     // Load dates that have data, then bootstrap
     authFetch('/dashboard/dates')
@@ -83,42 +149,120 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadDay(dateStr) {
         const isToday = dateStr === _fmtDate(today);
         dateLabel.textContent = isToday ? "Today's overview" : `Overview for ${_pretty(dateStr)}`;
-        await Promise.all([loadStats(dateStr), loadTenders()]);
+        // Reset filters whenever the date changes so the dropdown is clean
+        filterSite.value = '';
+        filterKw.value   = '';
+        // Stats must finish first — it populates the site dropdown before tenders load
+        await loadStats(dateStr);
+        await loadTenders();
     }
 
+    const _SITE_CFG = {
+        ungm:   { icon: '🌐', label: 'UNGM',   cls: 'scard-ungm'   },
+        devnet: { icon: '💼', label: 'DevNet', cls: 'scard-devnet' },
+        ngobox: { icon: '📦', label: 'NGOBox', cls: 'scard-ngobox' },
+        taiq:   { icon: '🤖', label: 'TAiQ',   cls: 'scard-taiq'   },
+    };
+
     async function loadStats(dateStr) {
-        statsRow.innerHTML = '<div class="stat-card stat-placeholder">Loading…</div>';
+        statsRow.innerHTML = '';
         actWrap.innerHTML  = '<p class="empty-msg">Loading…</p>';
 
         const res  = await authFetch(`/dashboard/stats?date=${dateStr}`);
         if (!res) return;
         const data = await res.json();
 
-        // Stats cards
-        if (!data.by_site || data.by_site.length === 0) {
-            statsRow.innerHTML = '<div class="stat-card"><span class="stat-num">0</span><span class="stat-label">No runs today</span></div>';
+        // ── Stat cards v2 ──────────────────────────────────────────────────
+        const siteTotals = data.by_site || [];
+        const grandTotal = siteTotals.reduce((s, x) => s + x.count, 0);
+
+        if (siteTotals.length === 0) {
+            statsRow.innerHTML = `
+                <div class="stat-card-v2 scard-runs" style="grid-column:1/-1;text-align:center">
+                    <div class="sc2-icon">📋</div>
+                    <span class="sc2-num">0</span>
+                    <span class="sc2-label">No activity for this date</span>
+                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:0%"></div></div>
+                </div>`;
         } else {
-            allSites = new Set(data.by_site.map(s => s.site));
-            statsRow.innerHTML = data.by_site.map(s => `
-                <div class="stat-card">
-                    <span class="stat-num">${s.count}</span>
-                    <span class="stat-label">${s.site.toUpperCase()}</span>
-                </div>
-            `).join('') + `
-                <div class="stat-card stat-total">
-                    <span class="stat-num">${data.sessions.length}</span>
-                    <span class="stat-label">Runs</span>
-                </div>
-            `;
-            // Populate site filter
+            allSites = new Set(siteTotals.map(s => s.site));
+
+            const totalCard = `
+                <div class="stat-card-v2 scard-total">
+                    <div class="sc2-icon">📊</div>
+                    <span class="sc2-num">${grandTotal}</span>
+                    <span class="sc2-label">Total Tenders</span>
+                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
+                </div>`;
+
+            const siteCards = siteTotals.map(s => {
+                const cfg = _SITE_CFG[s.site] || { icon: '📌', label: s.site.toUpperCase(), cls: '' };
+                const pct = grandTotal > 0 ? Math.max(Math.round((s.count / grandTotal) * 100), 5) : 5;
+                return `
+                    <div class="stat-card-v2 ${cfg.cls}">
+                        <div class="sc2-icon">${cfg.icon}</div>
+                        <span class="sc2-num">${s.count}</span>
+                        <span class="sc2-label">${cfg.label}</span>
+                        <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:${pct}%"></div></div>
+                    </div>`;
+            }).join('');
+
+            const runsCard = `
+                <div class="stat-card-v2 scard-runs">
+                    <div class="sc2-icon">▶</div>
+                    <span class="sc2-num">${data.sessions.length}</span>
+                    <span class="sc2-label">Runs</span>
+                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
+                </div>`;
+
+            statsRow.innerHTML = totalCard + siteCards + runsCard;
+
             filterSite.innerHTML = '<option value="">All Sites</option>' +
-                [...allSites].map(s => `<option value="${s}">${s.toUpperCase()}</option>`).join('');
+                [...allSites].map(s => {
+                    const lbl = _SITE_CFG[s]?.label || s.toUpperCase();
+                    return `<option value="${s}">${lbl}</option>`;
+                }).join('');
         }
 
-        // Activity table
+        // ── Summary sentence ───────────────────────────────────────────────
+        const summaryEl = document.getElementById('dash-summary');
+        if (summaryEl) {
+            if (grandTotal > 0) {
+                const numSites = siteTotals.length;
+                const isToday  = dateStr === _fmtDate(today);
+                summaryEl.innerHTML =
+                    `<strong>${grandTotal}</strong> tender${grandTotal !== 1 ? 's' : ''} found across ` +
+                    `<strong>${numSites}</strong> site${numSites !== 1 ? 's' : ''} in ` +
+                    `<strong>${data.sessions.length}</strong> run${data.sessions.length !== 1 ? 's' : ''} ` +
+                    (isToday ? 'today' : `on ${_pretty(dateStr)}`);
+            } else {
+                summaryEl.textContent = '';
+            }
+        }
+
+        // ── Side breakdown chart ───────────────────────────────────────────
+        renderSideBreakdown(data);
+
+        // ── Activity table ─────────────────────────────────────────────────
         if (!data.sessions || data.sessions.length === 0) {
-            actWrap.innerHTML = '<p class="empty-msg">No runs on this date.</p>';
+            actWrap.innerHTML = `
+                <div class="dash-empty-state">
+                    <span class="des-icon">🗓️</span>
+                    <span class="des-title">No runs on this date</span>
+                    <span class="des-sub">Manual scrapes and TAiQ runs will appear here</span>
+                </div>`;
         } else {
+            const _statusDot = s => {
+                const cols = { complete:'#22c55e', running:'#f59e0b', failed:'#ef4444', stopped:'#a855f7' };
+                const c = cols[s.status] || '#94a3b8';
+                return `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:5px;vertical-align:middle;flex-shrink:0"></span>`;
+            };
+            const _truncKw = kw => {
+                if (!kw) return '—';
+                const parts = kw.split(',').map(k => k.trim()).filter(Boolean);
+                if (parts.length <= 2) return parts.join(', ');
+                return `${parts.slice(0, 2).join(', ')} <span style="color:var(--text-light)">+${parts.length - 2} more</span>`;
+            };
             actWrap.innerHTML = `
                 <table class="data-table">
                     <thead>
@@ -126,29 +270,67 @@ document.addEventListener('DOMContentLoaded', () => {
                             <th>User</th>
                             <th>Site</th>
                             <th>Keywords</th>
-                            <th>Tenders</th>
-                            <th>Time</th>
+                            <th style="text-align:center">Tenders</th>
+                            <th>Started</th>
                             <th>Download</th>
                         </tr>
                     </thead>
                     <tbody>
                         ${data.sessions.map(s => `
-                            <tr>
-                                <td><strong>${s.username}</strong></td>
-                                <td><span class="site-badge site-${s.site}">${s.site.toUpperCase()}</span></td>
-                                <td class="keywords-cell">${s.keywords || '—'}</td>
-                                <td>${s.tenders_found}</td>
+                            <tr${s.source === 'taiq' ? ' class="taiq-activity-row"' : ''}>
+                                <td style="white-space:nowrap">
+                                    ${_statusDot(s)}<strong>${s.source === 'taiq' ? '🤖 ' : ''}${s.username}</strong>
+                                </td>
+                                <td><span class="site-badge site-${s.site}">${(_SITE_CFG[s.site]?.label || s.site).toUpperCase()}</span></td>
+                                <td class="keywords-cell">${_truncKw(s.keywords)}</td>
+                                <td style="text-align:center"><strong>${s.tenders_found}</strong></td>
                                 <td class="time-cell">${_timeOnly(s.created_at)}</td>
-                                <td>${s.zip_filename
-                                    ? `<a class="dl-link" href="/download?name=${encodeURIComponent(s.zip_filename)}&token=${getToken()}" download>ZIP</a>`
-                                    : '—'
+                                <td>${s.source === 'taiq'
+                                    ? `<a class="dl-link" href="/taiq-work">View →</a>`
+                                    : s.zip_filename
+                                        ? `<a class="dl-link" href="/download?name=${encodeURIComponent(s.zip_filename)}&token=${getToken()}" download>ZIP</a>`
+                                        : `<span style="color:var(--text-light);font-size:0.8rem">—</span>`
                                 }</td>
                             </tr>
                         `).join('')}
                     </tbody>
-                </table>
-            `;
+                </table>`;
         }
+    }
+
+    function renderSideBreakdown(data) {
+        const panel = document.getElementById('side-breakdown-panel');
+        if (!panel) return;
+        const sites = data.by_site || [];
+        const total = sites.reduce((s, x) => s + x.count, 0);
+        const colors = { ungm:'#f59e0b', devnet:'#3b82f6', ngobox:'#10b981', taiq:'#7c3aed' };
+        const labels = { ungm:'UNGM', devnet:'DevNet', ngobox:'NGOBox', taiq:'TAiQ' };
+        if (!sites.length || total === 0) {
+            panel.innerHTML = `
+                <div class="sbd-title">Today at a glance</div>
+                <p class="sbd-empty">No tenders found yet</p>`;
+            return;
+        }
+        const rows = sites.map(s => {
+            const pct   = Math.max(Math.round((s.count / total) * 100), 4);
+            const color = colors[s.site] || '#64748b';
+            const label = labels[s.site] || s.site.toUpperCase();
+            return `
+                <div class="sbd-row">
+                    <span class="sbd-site-label">${label}</span>
+                    <div class="sbd-bar-track">
+                        <div class="sbd-bar-fill" style="width:${pct}%;background:${color}"></div>
+                    </div>
+                    <span class="sbd-count">${s.count}</span>
+                </div>`;
+        }).join('');
+        panel.innerHTML = `
+            <div class="sbd-title">Today at a glance</div>
+            ${rows}
+            <div class="sbd-footer">
+                <span>${data.sessions.length} run${data.sessions.length !== 1 ? 's' : ''}</span>
+                <strong style="color:var(--text-main)">${total} total</strong>
+            </div>`;
     }
 
     async function loadTenders() {
@@ -164,7 +346,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const tenders = await res.json();
 
         if (!tenders || tenders.length === 0) {
-            tendersGrid.innerHTML = '<p class="empty-msg">No tenders found for these filters.</p>';
+            const isFiltered = filterSite.value || filterKw.value.trim();
+            tendersGrid.innerHTML = `
+                <div class="dash-empty-state" style="grid-column:1/-1">
+                    <span class="des-icon">${isFiltered ? '🔍' : '📭'}</span>
+                    <span class="des-title">${isFiltered ? 'No matches' : 'No tenders yet'}</span>
+                    <span class="des-sub">${isFiltered ? 'Try adjusting your site or keyword filters' : 'TAiQ and manual runs will populate this once they complete'}</span>
+                </div>`;
             return;
         }
 
@@ -179,6 +367,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const val = String(v).length > 55 ? String(v).substring(0,55) + '…' : String(v);
             return `<div class="card-field"><strong>${k}</strong><span>${val}</span></div>`;
         }).join('');
+
+        const taiqTag = t.source === 'taiq'
+            ? '<span class="taiq-source-tag">🤖 TAiQ Auto</span>' : '';
 
         let actionsHtml = '';
         if (t.url || t.tender_dir) {
@@ -199,6 +390,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <div class="card-meta">
                     <span class="site-badge site-${t.site}">${t.site.toUpperCase()}</span>
                     <span class="kw-tag">${t.keyword}</span>
+                    ${taiqTag}
                 </div>
                 <h4>${t.title || 'Unknown Opportunity'}</h4>
                 <div class="card-fields">${fieldRows}</div>
@@ -266,5 +458,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const t = isoStr.split('T')[1];
         if (!t) return '—';
         return t.substring(0, 5);
+    }
+
+    function _duration(start, end) {
+        if (!start || !end) return '—';
+        try {
+            const ms = new Date(end) - new Date(start);
+            if (ms < 0) return '—';
+            const h = Math.floor(ms / 3600000);
+            const m = Math.floor((ms % 3600000) / 60000);
+            if (h > 0) return `${h}h ${m}m`;
+            return `${m}m`;
+        } catch { return '—'; }
     }
 });

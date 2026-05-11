@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAiQ Work</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=18">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
+    </nav>
+
+    <div class="main-layout">
+        <header class="page-header">
+            <h1>TAiQ Work</h1>
+            <p>Automated daily tender discovery — running every morning at 7:00 AM IST</p>
+        </header>
+
+        <!-- Superadmin trigger bar (hidden for non-superadmins via JS) -->
+        <div class="taiq-trigger-bar hidden" id="taiq-trigger-bar">
+            <div class="ttb-text">
+                <strong>Manual Trigger</strong>
+                <span>Force a scrape run right now regardless of schedule.</span>
+            </div>
+            <button class="ttb-run-btn" id="ttb-run-btn">▶ Run Now</button>
+        </div>
+
+        <!-- Running Banner -->
+        <div class="taiq-running-banner hidden" id="running-banner">
+            <div class="trb-left">
+                <span class="trb-pulse"></span>
+                <span class="trb-robot">🤖</span>
+                <div>
+                    <strong>TAiQ is working right now!</strong>
+                    <p id="trb-progress-text">Scraping in progress…</p>
+                </div>
+            </div>
+            <div class="trb-right">
+                <div class="trb-stat">
+                    <span class="trb-stat-num" id="trb-kw-num">—</span>
+                    <span class="trb-stat-label">Keywords done</span>
+                </div>
+                <div class="trb-stat">
+                    <span class="trb-stat-num" id="trb-td-num">0</span>
+                    <span class="trb-stat-label">Tenders found</span>
+                </div>
+                <!-- Only rendered by JS if role=superadmin -->
+                <button class="trb-stop-btn hidden" id="trb-stop-btn">⏹ Stop</button>
+            </div>
+        </div>
+
+        <!-- Main two-column layout: calendar + tenders -->
+        <div class="taiq-layout">
+
+            <!-- LEFT: Calendar panel -->
+            <div class="taiq-calendar-panel">
+                <div class="taiq-cal-header">
+                    <button class="taiq-cal-nav" id="cal-prev">&#8249;</button>
+                    <span class="taiq-cal-month" id="cal-month-label">—</span>
+                    <button class="taiq-cal-nav" id="cal-next">&#8250;</button>
+                </div>
+                <div class="taiq-cal-weekdays">
+                    <span>Su</span><span>Mo</span><span>Tu</span>
+                    <span>We</span><span>Th</span><span>Fr</span><span>Sa</span>
+                </div>
+                <div class="taiq-cal-grid" id="cal-grid"></div>
+
+                <div class="taiq-cal-legend">
+                    <span class="cal-legend-dot dot-complete"></span> Complete
+                    <span class="cal-legend-dot dot-failed"></span> Failed
+                    <span class="cal-legend-dot dot-running"></span> Running
+                </div>
+            </div>
+
+            <!-- RIGHT: Run details + tenders -->
+            <div class="taiq-right-panel" id="taiq-right-panel">
+
+                <!-- No selection -->
+                <div class="taiq-empty-state" id="taiq-empty-state">
+                    <div class="taiq-empty-icon">📅</div>
+                    <h3>Pick a date</h3>
+                    <p>Select a highlighted date from the calendar to view tenders found on that day.</p>
+                </div>
+
+                <!-- Run summary card -->
+                <div class="taiq-run-summary hidden" id="taiq-run-summary">
+                    <div class="trs-row">
+                        <div class="trs-date" id="trs-date">—</div>
+                        <span class="status-badge" id="trs-status-badge">—</span>
+                    </div>
+                    <div class="trs-stats">
+                        <div class="trs-stat">
+                            <span class="trs-stat-num" id="trs-kw-done">—</span>
+                            <span class="trs-stat-lbl">Keywords</span>
+                        </div>
+                        <div class="trs-stat">
+                            <span class="trs-stat-num" id="trs-tenders">—</span>
+                            <span class="trs-stat-lbl">Tenders</span>
+                        </div>
+                        <div class="trs-stat">
+                            <span class="trs-stat-num" id="trs-duration">—</span>
+                            <span class="trs-stat-lbl">Duration</span>
+                        </div>
+                    </div>
+                    <div class="trs-error hidden" id="trs-error"></div>
+                </div>
+
+                <!-- Filter row -->
+                <div class="taiq-filter-row hidden" id="taiq-filter-row">
+                    <input type="text" id="taiq-filter-kw" class="filter-input"
+                           placeholder="Filter by keyword…">
+                    <span class="results-count-lbl" id="taiq-count-lbl">0 tenders</span>
+                </div>
+
+                <!-- Tenders grid -->
+                <div class="results-grid" id="taiq-tenders-grid"></div>
+
+                <!-- Logs panel — shown to admin + superadmin via JS -->
+                <div class="taiq-logs-card hidden" id="taiq-logs-card">
+                    <div class="tlc-header" id="tlc-header">
+                        <div class="tlc-title">
+                            <span>📋</span>
+                            <strong>Run Logs</strong>
+                            <span class="tlc-live-badge hidden" id="tlc-live-badge">● LIVE</span>
+                        </div>
+                        <button class="tlc-toggle-btn" id="tlc-toggle-btn">Hide</button>
+                    </div>
+                    <div class="tlc-body" id="tlc-body">
+                        <pre class="tlc-lines" id="tlc-lines">Select a date to load logs.</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script>initNav();</script>
+    <script src="/static/taiq.js?v=2"></script>
+</body>
+</html>
