@@ -64,6 +64,10 @@ class _Cursor:
                 return None
         return self._c.lastrowid
 
+    @property
+    def rowcount(self) -> int:
+        return self._c.rowcount
+
 
 # ── Normalized connection ──────────────────────────────────────────────────────
 
@@ -758,8 +762,7 @@ class TenderDB:
                    WHERE status='running'""",
                 (now,),
             )
-            # rowcount works the same on both backends
-            return cur._c.rowcount
+            return cur.rowcount
 
     def request_cron_stop(self, run_id: int):
         with self._connect() as conn:
