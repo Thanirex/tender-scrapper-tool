@@ -511,6 +511,8 @@ class UNGMScraperAgent:
                             pass
 
             # --- Extract all ZIP files recursively ---
+            # Extract member-by-member with truncated filenames to avoid Windows
+            # MAX_PATH (260-char) errors when zip entries have long original names.
             try:
                 import zipfile
                 while True:
@@ -521,17 +523,24 @@ class UNGMScraperAgent:
                     for zf in zip_files:
                         try:
                             with zipfile.ZipFile(zf, 'r') as zip_ref:
-                                zip_ref.extractall(tender_dir)
+                                for member in zip_ref.infolist():
+                                    if member.filename.endswith('/'):
+                                        continue
+                                    member_p = Path(member.filename)
+                                    safe_stem = re.sub(r'[\*?:"<>|]', "_", member_p.stem)[:80]
+                                    safe_ext  = re.sub(r'[\*?:"<>|]', "_", member_p.suffix)[:10]
+                                    out_file  = tender_dir / (safe_stem + safe_ext)
+                                    out_file.write_bytes(zip_ref.read(member))
                                 log(f"      📦 Extracted zip: {zf.name}")
-                            zf.unlink()  # Delete the zip file
+                            zf.unlink()
                             extracted_any = True
                         except Exception as e:
                             log(f"      ⚠️ Error extracting {zf.name}: {e}")
                             try:
-                                zf.unlink()  # Delete broken zip to prevent infinite loop
+                                zf.unlink()
                             except Exception:
                                 pass
-                            
+
                     if not extracted_any:
                         break
                         

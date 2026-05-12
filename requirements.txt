@@ -13,5 +13,6 @@ python-jose[cryptography]
 bcrypt
 apscheduler
 pytz
-# Uncomment the line below to use PostgreSQL instead of SQLite:
+pymysql
+# Uncomment the line below to use PostgreSQL instead of MySQL:
 # psycopg2-binary

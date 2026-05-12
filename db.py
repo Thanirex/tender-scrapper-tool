@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _normalize(title: str) -> str:
@@ -17,14 +18,28 @@ def _normalize(title: str) -> str:
 # Set DATABASE_URL in .env to switch backends:
 #   SQLite (default):   DATABASE_URL=sqlite:///path/to/custom.db
 #   PostgreSQL:         DATABASE_URL=postgresql://user:pass@host:5432/dbname
+#   MySQL:              DATABASE_URL=mysql://user:pass@host:3306/dbname
+#                   or  DATABASE_URL=mysql+pymysql://user:pass@host:3306/dbname
 #
 # If DATABASE_URL is not set, SQLite at DB_PATH (from paths.py) is used.
 
 _DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
-_IS_PG        = _DATABASE_URL.startswith(("postgresql://", "postgres://"))
+_IS_PG    = _DATABASE_URL.startswith(("postgresql://", "postgres://"))
+_IS_MYSQL = _DATABASE_URL.startswith(("mysql://", "mysql+pymysql://"))
 
-# PRIMARY KEY fragment differs between backends
-_PK = "SERIAL PRIMARY KEY" if _IS_PG else "INTEGER PRIMARY KEY AUTOINCREMENT"
+if _IS_PG:
+    _PK = "SERIAL PRIMARY KEY"
+elif _IS_MYSQL:
+    _PK = "INT AUTO_INCREMENT PRIMARY KEY"
+else:
+    _PK = "INTEGER PRIMARY KEY AUTOINCREMENT"
+
+# MySQL requires VARCHAR for indexed columns; TEXT cannot be fully indexed without a prefix.
+# title_norm is indexed for dedup; url is uniquely indexed in downloaded_tenders/cron_dedup.
+# username/email carry inline UNIQUE constraints — MySQL needs a prefix length via VARCHAR.
+_IDX_TEXT  = "VARCHAR(500)" if _IS_MYSQL else "TEXT"   # for indexed text columns
+_URL_COL   = "VARCHAR(767)" if _IS_MYSQL else "TEXT"   # for uniquely-indexed url columns
+_USER_TEXT = "VARCHAR(191)" if _IS_MYSQL else "TEXT"   # for UNIQUE username/email columns
 
 
 def _get_sqlite_path(fallback: str) -> str:
@@ -34,22 +49,35 @@ def _get_sqlite_path(fallback: str) -> str:
     return fallback
 
 
+def _insert_ignore(table: str, cols: str, ph: str) -> str:
+    """Returns backend-appropriate insert-and-ignore-duplicates SQL."""
+    if _IS_MYSQL:
+        return f"INSERT IGNORE INTO {table} ({cols}) VALUES ({ph})"
+    # SQLite and PostgreSQL both support ON CONFLICT DO NOTHING
+    return f"INSERT INTO {table} ({cols}) VALUES ({ph}) ON CONFLICT DO NOTHING"
+
+
 # ── Normalized cursor ──────────────────────────────────────────────────────────
 
 class _Cursor:
-    """Wraps sqlite3.Cursor or psycopg2 cursor; always returns plain dicts."""
+    """Wraps sqlite3.Cursor, psycopg2 cursor, or PyMySQL DictCursor; always returns plain dicts."""
 
     def __init__(self, raw, conn_raw, pg: bool):
         self._c    = raw
-        self._conn = conn_raw  # raw conn, used for lastval() in PG
+        self._conn = conn_raw
         self._pg   = pg
 
     def fetchone(self) -> "dict | None":
         row = self._c.fetchone()
-        return dict(row) if row else None
+        if row is None:
+            return None
+        return row if isinstance(row, dict) else dict(row)
 
     def fetchall(self) -> "list[dict]":
-        return [dict(r) for r in self._c.fetchall()]
+        rows = self._c.fetchall()
+        if not rows:
+            return []
+        return list(rows) if isinstance(rows[0], dict) else [dict(r) for r in rows]
 
     @property
     def lastrowid(self) -> "int | None":
@@ -62,6 +90,7 @@ class _Cursor:
                 return tmp.fetchone()[0]
             except Exception:
                 return None
+        # Works for both SQLite (sqlite3.Cursor.lastrowid) and MySQL (PyMySQL cursor.lastrowid)
         return self._c.lastrowid
 
     @property
@@ -72,7 +101,7 @@ class _Cursor:
 # ── Normalized connection ──────────────────────────────────────────────────────
 
 class _Conn:
-    """Context-managed DB connection for SQLite or PostgreSQL.
+    """Context-managed DB connection for SQLite, PostgreSQL, or MySQL.
 
     Usage is identical to sqlite3 connection context managers:
 
@@ -89,6 +118,22 @@ class _Conn:
         if _IS_PG:
             import psycopg2
             self._raw = psycopg2.connect(_DATABASE_URL)
+        elif _IS_MYSQL:
+            import pymysql
+            import pymysql.cursors
+            # Normalise mysql+pymysql:// → mysql:// so urlparse works correctly
+            url = _DATABASE_URL.replace("mysql+pymysql://", "mysql://", 1)
+            p   = urlparse(url)
+            self._raw = pymysql.connect(
+                host=p.hostname or "localhost",
+                port=p.port or 3306,
+                user=p.username or "",
+                password=p.password or "",
+                database=(p.path or "").lstrip("/"),
+                charset="utf8mb4",
+                cursorclass=pymysql.cursors.DictCursor,
+                autocommit=False,
+            )
         else:
             self._raw = sqlite3.connect(
                 _get_sqlite_path(self._path), timeout=10, check_same_thread=False
@@ -108,13 +153,18 @@ class _Conn:
                 self._raw = None
 
     def execute(self, sql: str, params=()) -> _Cursor:
-        """Execute SQL.  Rewrites ? → %s automatically for PostgreSQL."""
+        """Execute SQL.  Rewrites ? → %s automatically for PostgreSQL and MySQL."""
         if _IS_PG:
             import psycopg2.extras
             sql = sql.replace("?", "%s")
             cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(sql, params or ())
             return _Cursor(cur, self._raw, pg=True)
+        if _IS_MYSQL:
+            sql = sql.replace("?", "%s")
+            cur = self._raw.cursor()
+            cur.execute(sql, params or ())
+            return _Cursor(cur, self._raw, pg=False)
         cur = self._raw.execute(sql, params or ())
         return _Cursor(cur, self._raw, pg=False)
 
@@ -139,42 +189,80 @@ class TenderDB:
             conn.execute(
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {defn}"
             )
+        elif _IS_MYSQL:
+            # MySQL has no ADD COLUMN IF NOT EXISTS; check INFORMATION_SCHEMA first.
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                (table, col),
+            ).fetchone()
+            if not (row and row.get("cnt", 0) > 0):
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
         else:
             try:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
                 pass  # column already exists
 
+    def _idx(self, conn: _Conn, unique: bool, name: str, table: str,
+             col: str, prefix: int = 0):
+        """Create an index, wrapping in try/except for already-exists errors.
+
+        prefix is used for MySQL TEXT columns (e.g. run_date(10), timestamp(19)).
+        It is ignored for non-MySQL backends and when col is already VARCHAR.
+        """
+        u        = "UNIQUE " if unique else ""
+        col_expr = f"{col}({prefix})" if (_IS_MYSQL and prefix) else col
+        try:
+            conn.execute(f"CREATE {u}INDEX IF NOT EXISTS {name} ON {table} ({col_expr})")
+        except Exception:
+            pass
+
+    def _url_idx(self, conn: _Conn, name: str, table: str):
+        """Create the unique index on the url column.
+
+        MySQL does not support partial/conditional indexes, so no WHERE clause is used.
+        SQLite and PostgreSQL use a partial index to allow multiple NULL / empty URLs.
+        Since the codebase now stores NULL (not '') for missing URLs, the partial index
+        is still correct for those backends.
+        """
+        try:
+            if _IS_MYSQL:
+                conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (url)"
+                )
+            else:
+                conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {name} "
+                    f"ON {table} (url) WHERE url IS NOT NULL AND url != ''"
+                )
+        except Exception:
+            pass
+
     def _init_schema(self):
         with self._connect() as conn:
             # ── Dedup table ────────────────────────────────────────────────
+            # title_norm and url are indexed; use VARCHAR widths for MySQL.
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS downloaded_tenders (
                     id              {_PK},
-                    title_norm      TEXT    NOT NULL,
-                    url             TEXT,
+                    title_norm      {_IDX_TEXT} NOT NULL,
+                    url             {_URL_COL},
                     site            TEXT,
                     keyword         TEXT,
                     published_date  TEXT,
-                    downloaded_at   TEXT    NOT NULL
+                    downloaded_at   TEXT NOT NULL
                 )
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_title "
-                "ON downloaded_tenders (title_norm)"
-            )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_url "
-                "ON downloaded_tenders (url) "
-                "WHERE url IS NOT NULL AND url != ''"
-            )
+            self._idx(conn, False, "idx_title", "downloaded_tenders", "title_norm")
+            self._url_idx(conn, "idx_url", "downloaded_tenders")
 
             # ── Users ──────────────────────────────────────────────────────
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS users (
                     id            {_PK},
-                    username      TEXT    NOT NULL UNIQUE,
-                    email         TEXT    NOT NULL UNIQUE,
+                    username      {_USER_TEXT} NOT NULL UNIQUE,
+                    email         {_USER_TEXT} NOT NULL UNIQUE,
                     password_hash TEXT    NOT NULL,
                     role          TEXT    NOT NULL
                                   CHECK(role IN ('superadmin','admin','user')),
@@ -196,10 +284,8 @@ class TenderDB:
                     created_at   TEXT    NOT NULL
                 )
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_date "
-                "ON search_sessions (run_date)"
-            )
+            # run_date is always "YYYY-MM-DD" (10 chars); prefix(10) covers it in MySQL.
+            self._idx(conn, False, "idx_sessions_date", "search_sessions", "run_date", prefix=10)
 
             # ── Keywords per session ───────────────────────────────────────
             conn.execute(f"""
@@ -227,10 +313,7 @@ class TenderDB:
                 )
             """)
             self._add_col(conn, "found_tenders", "tender_dir", "TEXT")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_found_session "
-                "ON found_tenders (session_id)"
-            )
+            self._idx(conn, False, "idx_found_session", "found_tenders", "session_id")
 
             # ── Tender documents ───────────────────────────────────────────
             conn.execute(f"""
@@ -257,10 +340,8 @@ class TenderDB:
                     timestamp    TEXT    NOT NULL
                 )
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_ts "
-                "ON activity_logs (timestamp)"
-            )
+            # timestamp is always "YYYY-MM-DDTHH:MM:SS" (19 chars); prefix(19) covers it.
+            self._idx(conn, False, "idx_logs_ts", "activity_logs", "timestamp", prefix=19)
 
             # ── TAiQ cron runs ─────────────────────────────────────────────
             conn.execute(f"""
@@ -282,10 +363,7 @@ class TenderDB:
             self._add_col(conn, "cron_runs", "stop_requested",  "INTEGER NOT NULL DEFAULT 0")
             self._add_col(conn, "cron_runs", "current_keyword", "TEXT    NOT NULL DEFAULT ''")
             self._add_col(conn, "cron_runs", "log_file",        "TEXT")
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_cron_runs_date "
-                "ON cron_runs (run_date)"
-            )
+            self._idx(conn, False, "idx_cron_runs_date", "cron_runs", "run_date", prefix=10)
 
             # ── TAiQ cron tenders ──────────────────────────────────────────
             conn.execute(f"""
@@ -302,32 +380,23 @@ class TenderDB:
                     found_at        TEXT    NOT NULL
                 )
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_cron_tenders_run "
-                "ON cron_tenders (run_id)"
-            )
+            self._idx(conn, False, "idx_cron_tenders_run", "cron_tenders", "run_id")
 
             # ── Cron dedup ─────────────────────────────────────────────────
+            # title_norm and url are indexed; use VARCHAR widths for MySQL.
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS cron_dedup (
                     id              {_PK},
-                    title_norm      TEXT    NOT NULL,
-                    url             TEXT,
+                    title_norm      {_IDX_TEXT} NOT NULL,
+                    url             {_URL_COL},
                     site            TEXT,
                     keyword         TEXT,
                     published_date  TEXT,
                     found_at        TEXT    NOT NULL
                 )
             """)
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_cron_dedup_title "
-                "ON cron_dedup (title_norm)"
-            )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_dedup_url "
-                "ON cron_dedup (url) "
-                "WHERE url IS NOT NULL AND url != ''"
-            )
+            self._idx(conn, False, "idx_cron_dedup_title", "cron_dedup", "title_norm")
+            self._url_idx(conn, "idx_cron_dedup_url", "cron_dedup")
 
     # ── Dedup ──────────────────────────────────────────────────────────────────
 
@@ -351,11 +420,12 @@ class TenderDB:
         now  = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
-                """INSERT INTO downloaded_tenders
-                   (title_norm, url, site, keyword, published_date, downloaded_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT DO NOTHING""",
-                (norm, url or "", site or "", keyword or "", published_date or "", now),
+                _insert_ignore(
+                    "downloaded_tenders",
+                    "title_norm, url, site, keyword, published_date, downloaded_at",
+                    "?, ?, ?, ?, ?, ?",
+                ),
+                (norm, url or None, site or "", keyword or "", published_date or "", now),
             )
 
     # ── User management ────────────────────────────────────────────────────────
@@ -470,7 +540,7 @@ class TenderDB:
                    (session_id, keyword, title, url, site, published_date,
                     summary_json, tender_dir, found_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (session_id, keyword, title, url or "", site,
+                (session_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
                  tender_dir or "", now),
             )
@@ -668,7 +738,7 @@ class TenderDB:
                    (run_id, keyword, title, url, site, published_date,
                     summary_json, tender_dir, found_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (run_id, keyword, title, url or "", site,
+                (run_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
                  tender_dir or "", now),
             )
@@ -693,11 +763,12 @@ class TenderDB:
         now  = datetime.now().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
-                """INSERT INTO cron_dedup
-                   (title_norm, url, site, keyword, published_date, found_at)
-                   VALUES (?, ?, ?, ?, ?, ?)
-                   ON CONFLICT DO NOTHING""",
-                (norm, url or "", site or "", keyword or "", published_date or "", now),
+                _insert_ignore(
+                    "cron_dedup",
+                    "title_norm, url, site, keyword, published_date, found_at",
+                    "?, ?, ?, ?, ?, ?",
+                ),
+                (norm, url or None, site or "", keyword or "", published_date or "", now),
             )
 
     def get_cron_run(self, run_id: int) -> "dict | None":

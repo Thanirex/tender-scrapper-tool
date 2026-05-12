@@ -59,7 +59,7 @@ FastAPI  (api.py)
     │
     └── Superadmin API  audit log · platform-wide controls
     
-SQLite  (tender_tracker.db)
+MySQL / SQLite  (tender_tracker.db or DATABASE_URL)
     tables: users · sessions · found_tenders · cron_runs · cron_tenders · audit_log
 ```
 
@@ -107,6 +107,7 @@ Log in with the superadmin credentials you set in `.env`. TAiQ will fire its fir
 | `SUPERADMIN_EMAIL` | No | Email for the seeded superadmin |
 | `SUPERADMIN_PASSWORD` | No | Password for the seeded superadmin (default: `changeme123` — change this) |
 | `TENDER_DATA_DIR` | No | Override data directory (default: `~/Documents/Tender Scrapping Documents`) — set to `/data` in Docker |
+| `DATABASE_URL` | No | Database connection string — leave unset for SQLite, or set to `mysql+pymysql://user:pass@host:3306/db` for MySQL (see Database section below) |
 
 ---
 
@@ -189,72 +190,100 @@ Open `http://localhost:8001`.
 
 ## Database
 
-TAiQ defaults to **SQLite** — a single file stored inside the Docker volume at `$TENDER_DATA_DIR/tender_tracker.db`. This is production-ready for single-server deployments and requires zero setup.
+TAiQ supports **MySQL 8.0+** (recommended for production), **SQLite** (zero-setup, good for a single server), and **PostgreSQL**. The backend is selected entirely through the `DATABASE_URL` environment variable — no code changes needed.
 
-### Option A — default SQLite (no configuration needed)
+---
+
+### Option A — MySQL 8.0+ (recommended for production)
+
+This is the standard deployment option. Your DBA creates the database once; TAiQ connects on every startup.
+
+**Step 1 — create the database and user** (run as MySQL root or DBA):
+
+```sql
+CREATE DATABASE taiq_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'taiq_user'@'%' IDENTIFIED BY 'strong-password-here';
+GRANT ALL PRIVILEGES ON taiq_db.* TO 'taiq_user'@'%';
+FLUSH PRIVILEGES;
+```
+
+> The `utf8mb4` charset is required. TAiQ stores Unicode tender titles and URLs — the default `latin1` will corrupt them.
+
+**Step 2 — apply the schema** (run once before the first TAiQ startup):
+
+```bash
+mysql -h db-server.company.com -u taiq_user -p taiq_db < schema_mysql.sql
+```
+
+TAiQ will also attempt to auto-create missing tables on startup, but running the schema file first gives your DBA visibility into what is being created and prevents permission surprises.
+
+**Step 3 — set `DATABASE_URL` in `.env`**:
+
+```
+DATABASE_URL=mysql+pymysql://taiq_user:strong-password-here@db-server.company.com:3306/taiq_db
+```
+
+**Step 4 — rebuild and start**:
+
+```bash
+docker compose build --no-cache
+docker compose up -d
+```
+
+TAiQ connects to MySQL on startup. The `pymysql` driver is already in `requirements.txt` — no extra packages needed.
+
+---
+
+### Option B — SQLite (zero-setup, single-server deployments)
+
+No database server required. TAiQ writes to a single file inside the Docker volume.
 
 ```
 TENDER_DATA_DIR=/data          # already set in .env.example
 # DATABASE_URL not set         # TAiQ uses SQLite at /data/tender_tracker.db
 ```
 
-The file is in a named Docker volume (`taiq-data`). Back it up with:
+Back up the file at any time:
 
 ```bash
 docker run --rm -v taiq-data:/data -v $(pwd):/backup alpine \
   tar czf /backup/taiq-backup.tar.gz /data
 ```
 
-### Option B — point SQLite at a network share
-
-If your company has a shared NFS/SMB mount you want the data on:
+SQLite also works over a network share as long as only one TAiQ container writes at a time:
 
 ```
 DATABASE_URL=sqlite:////mnt/company-share/taiq/taiq.db
 ```
 
-SQLite works fine over network storage as long as only one TAiQ instance writes at a time (which is the normal single-container setup).
+---
 
-### Option C — connect to your company's PostgreSQL server
-
-1. Create a database and user on your PostgreSQL server:
+### Option C — PostgreSQL
 
 ```sql
+-- Run as postgres superuser
 CREATE DATABASE taiq_db;
 CREATE USER taiq_user WITH PASSWORD 'strong-password-here';
 GRANT ALL PRIVILEGES ON DATABASE taiq_db TO taiq_user;
 ```
 
-2. Run the schema file (once) to create all tables:
-
 ```bash
 psql -U taiq_user -d taiq_db -f schema.sql
 ```
-
-3. Set `DATABASE_URL` in your `.env`:
 
 ```
 DATABASE_URL=postgresql://taiq_user:strong-password-here@db-server.company.com:5432/taiq_db
 ```
 
-4. Add the PostgreSQL driver to `requirements.txt`:
+Uncomment `psycopg2-binary` in `requirements.txt`, then rebuild:
 
-Uncomment this line in `requirements.txt`:
-```
-psycopg2-binary
-```
-
-Then rebuild the Docker image:
 ```bash
-docker compose build --no-cache
-docker compose up -d
+docker compose build --no-cache && docker compose up -d
 ```
 
-TAiQ will connect to PostgreSQL on startup — no code changes needed.
+---
 
 ### Schema reference
-
-All tables are defined in `schema.sql`. The main ones:
 
 | Table | Contents |
 |---|---|
@@ -264,7 +293,10 @@ All tables are defined in `schema.sql`. The main ones:
 | `cron_runs` | One row per TAiQ autonomous agent run |
 | `cron_tenders` | Tenders discovered by TAiQ |
 | `cron_dedup` | Cross-run deduplication index for TAiQ |
+| `downloaded_tenders` | Global dedup index (manual scrapes) |
 | `activity_logs` | Audit trail — every login, scrape, and admin action |
+
+MySQL DDL is in `schema_mysql.sql`. PostgreSQL / SQLite DDL is in `schema.sql`.
 
 ---
 
@@ -273,8 +305,9 @@ All tables are defined in `schema.sql`. The main ones:
 ```
 api.py                      FastAPI app, static routes, superadmin seed
 auth.py                     JWT encode/decode, bcrypt, role middleware
-db.py                       TenderDB (SQLite + PostgreSQL via DATABASE_URL), CronDBProxy
-schema.sql                  PostgreSQL DDL — run once to set up an existing PG database
+db.py                       TenderDB (SQLite / MySQL / PostgreSQL via DATABASE_URL), CronDBProxy
+schema_mysql.sql            MySQL 8.0+ DDL — run once before first startup with a MySQL DATABASE_URL
+schema.sql                  PostgreSQL / SQLite DDL
 cron_runner.py              TAiQ autonomous agent, APScheduler, stop signal
 date_utils.py               IST-aware date helpers
 paths.py                    Centralised path config, TENDER_DATA_DIR support
@@ -322,7 +355,7 @@ entrypoint.sh
 | Browser automation | Playwright (Chromium headless) |
 | LLM | Google Gemini — `gemma-4-31b-it` |
 | Scheduling | APScheduler (CronTrigger) |
-| Database | SQLite via Python stdlib |
+| Database | MySQL 8.0+ (prod) · SQLite (dev/single-server) · PostgreSQL |
 | Auth | JWT (`python-jose`) · bcrypt |
 | Document parsing | pdfplumber · python-docx · openpyxl |
 | Container | Docker · Docker Compose |
