@@ -2,7 +2,8 @@ import os
 import re
 import time
 # from groq import Groq
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 _MAX_CHARS_DEFAULT = 500_000
 # _MODEL = "llama-3.1-8b-instant"   # Groq model
@@ -39,8 +40,7 @@ class SummarizerAgent:
             print("⚠️ WARNING: Invalid or missing GEMINI_API_KEY in .env. Falling back to dummy mode.")
             self.client = None
         else:
-            genai.configure(api_key=api_key)
-            self.client = True  # configured globally via genai.configure
+            self.client = genai.Client(api_key=api_key)
 
     # ── Public methods ────────────────────────────────────────────────────────
 
@@ -117,13 +117,15 @@ class SummarizerAgent:
         # return response.choices[0].message.content.strip()
 
         # ── Gemini call ───────────────────────────────────────────────────────
-        model = genai.GenerativeModel(
-            model_name=_MODEL,
-            system_instruction=system,
-        )
         for attempt in range(_MAX_RETRIES):
             try:
-                response = model.generate_content(prompt)
+                response = self.client.models.generate_content(
+                    model=_MODEL,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=system,
+                    ),
+                )
                 return response.text.strip()
             except Exception as e:
                 err = str(e)
