@@ -70,10 +70,13 @@ class SummarizerAgent:
         log = self._make_logger(log_callback)
 
         if not self._has_content(text):
+            log(f"⚠️ [Summarizer] No content to summarize (text length={len(text) if text else 0}). Returning empty fields.")
             return {}
         if not self.client:
             return {"BID_TITLE": "(Gemini Key Not Setup)"}
 
+        # Strip null bytes and other control chars that can cause gRPC serialization errors
+        text = text.replace('\x00', '').replace('\x0b', '').replace('\x0c', '')
         snippet = text[:max_chars]
         log(f"🤖 [Summarizer] Extracting Level 1 fields from {len(snippet):,} chars...")
 
@@ -104,18 +107,6 @@ class SummarizerAgent:
         Call Gemini with retry on rate-limit (HTTP 429 / RESOURCE_EXHAUSTED).
         Returns the stripped response string, or error_return on failure.
         """
-        # ── Groq call (commented out) ─────────────────────────────────────────
-        # messages = [
-        #     {"role": "system", "content": system},
-        #     {"role": "user",   "content": prompt},
-        # ]
-        # response = self.client.chat.completions.create(
-        #     messages=messages,
-        #     model=_MODEL,
-        #     temperature=_TEMPERATURE,
-        # )
-        # return response.choices[0].message.content.strip()
-
         # ── Gemini call ───────────────────────────────────────────────────────
         for attempt in range(_MAX_RETRIES):
             try:
@@ -126,7 +117,14 @@ class SummarizerAgent:
                         system_instruction=system,
                     ),
                 )
-                return response.text.strip()
+                text = response.text
+                if text is None:
+                    # Gemini blocked the response (safety filters, MAX_TOKENS, etc.)
+                    candidates = getattr(response, "candidates", [])
+                    reason = candidates[0].finish_reason if candidates else "unknown"
+                    log(f"⚠️ Gemini returned no text — finish_reason={reason}. Treating as empty response.")
+                    return error_return
+                return text.strip()
             except Exception as e:
                 err = str(e)
                 is_rate_limit = (
@@ -138,7 +136,7 @@ class SummarizerAgent:
                     log(f"⏳ Gemini rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/{_MAX_RETRIES})...")
                     time.sleep(wait_s)
                     continue
-                log(f"❌ Gemini Error: {e}")
+                log(f"❌ Gemini Error ({type(e).__name__}): {e}")
                 return error_return
         return error_return
 

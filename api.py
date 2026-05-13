@@ -337,14 +337,28 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
         page_text = res.get("page_text", "").strip()
         if page_text:
             text_parts.append(f"=== UNGM NOTICE PAGE TEXT ===\n{page_text}")
-        for fpath in res.get("files", []):
-            file_text = read_file(fpath)
-            if file_text and file_text.strip():
-                fname = os.path.basename(fpath)
-                text_parts.append(f"=== ATTACHED DOCUMENT: {fname} ===\n{file_text.strip()}")
+        else:
+            log_cb(f"⚠️ No page text scraped for: {title[:55]}")
+        files_list = res.get("files", [])
+        log_cb(f"   📂 Reading {len(files_list)} file(s) for summarization...")
+        for fpath in files_list:
+            try:
+                file_text = read_file(fpath)
+                if file_text and file_text.strip():
+                    fname = os.path.basename(fpath)
+                    text_parts.append(f"=== ATTACHED DOCUMENT: {fname} ===\n{file_text.strip()}")
+                else:
+                    log_cb(f"   ⚠️ Empty/unreadable: {os.path.basename(fpath)}")
+            except Exception as fe:
+                log_cb(f"   ⚠️ read_file error on {os.path.basename(fpath)}: {fe}")
 
         combined = "\n\n".join(text_parts)
+        log_cb(f"   📝 Combined content: {len(combined):,} chars across {len(text_parts)} section(s)")
+        if not combined.strip():
+            log_cb(f"❌ Nothing to summarize — page text empty and no readable files. verified={bool(verified)}")
         fields = summarizer.summarize_level1(combined, log_callback=log_cb)
+        if not fields:
+            log_cb(f"⚠️ Summarizer returned no fields for: {title[:55]}")
 
         record = {
             "keyword": res["keyword"],
