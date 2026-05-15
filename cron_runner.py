@@ -192,16 +192,44 @@ def run_daily_job():
             page_text = res.get("page_text", "").strip()
             if page_text:
                 text_parts.append(f"=== UNGM NOTICE PAGE TEXT ===\n{page_text}")
-            for fpath in res.get("files", []):
-                file_text = read_file(fpath)
-                if file_text and file_text.strip():
-                    fname = os.path.basename(fpath)
-                    text_parts.append(
-                        f"=== ATTACHED DOCUMENT: {fname} ===\n{file_text.strip()}"
-                    )
+            else:
+                _write_log(f"  ⚠️ No page text for: {title[:55]}")
+
+            _MAX_CHARS_PER_FILE = 25_000
+            _MAX_COMBINED_CHARS = 120_000
+
+            files_list = res.get("files", [])
+            _write_log(f"  📂 Reading {len(files_list)} file(s) for summarization...")
+            for fpath in files_list:
+                try:
+                    file_text = read_file(fpath)
+                    if file_text and file_text.strip():
+                        fname = os.path.basename(fpath)
+                        truncated = file_text[:_MAX_CHARS_PER_FILE]
+                        text_parts.append(
+                            f"=== ATTACHED DOCUMENT: {fname} ===\n{truncated.strip()}"
+                        )
+                    else:
+                        _write_log(f"  ⚠️ Empty/unreadable: {os.path.basename(fpath)}")
+                except Exception as fe:
+                    _write_log(f"  ⚠️ read_file error on {os.path.basename(fpath)}: {fe}")
 
             combined = "\n\n".join(text_parts)
-            fields   = summarizer.summarize_level1(combined)
+            _write_log(
+                f"  📝 Combined content: {len(combined):,} chars "
+                f"across {len(text_parts)} section(s)"
+            )
+            if not combined.strip():
+                _write_log(
+                    f"  ❌ Nothing to summarize — page text empty and no readable files. "
+                    f"verified={bool(verified)}"
+                )
+
+            fields = summarizer.summarize_level1(
+                combined, log_callback=_write_log, max_chars=_MAX_COMBINED_CHARS
+            )
+            if not fields:
+                _write_log(f"  ⚠️ Summarizer returned no fields for: {title[:55]}")
 
             tender_dir = Path(res.get("tender_dir", str(ungm_run_dir)))
             safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
