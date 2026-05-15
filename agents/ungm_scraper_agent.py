@@ -245,6 +245,11 @@ class UNGMScraperAgent:
 
             log(f"      📋 {title[:70]}")
 
+            # ── Keyword relevance check ──────────────────────────────────────
+            if keyword.lower() not in title.lower():
+                log(f"      🚫 Skipping '{title[:60]}' — keyword '{keyword}' not in title")
+                return None
+
             # Verified structured fields (ground truth — no LLM needed)
             verified = {}
             try:

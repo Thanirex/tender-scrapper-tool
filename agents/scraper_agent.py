@@ -80,16 +80,50 @@ class ScraperAgent:
                         page.wait_for_load_state("networkidle")
                         current_url = page.url
 
-                        # Fix for DevNet: The page URL stays the same due to AJAX postback.
-                        # We extract the true permalink from the form action.
-                        if "devnetjobs" in current_url.lower():
-                            try:
-                                form_action = page.locator("form").first.get_attribute("action")
-                                if form_action and "job_id=" in form_action:
-                                    clean_path = form_action.lstrip("./")
-                                    current_url = f"https://devnetjobsindia.org/{clean_path}"
-                            except Exception:
-                                pass
+                        # DevNet uses ASP.NET postbacks — page.url never changes after click.
+                        # Try multiple strategies to get a stable, shareable job URL.
+                        if "devnetjobs" in current_url.lower() and "job_id=" not in current_url:
+                            job_url = None
+
+                            # Strategy 1: any anchor on the detail page whose href has job_id=
+                            if not job_url:
+                                try:
+                                    hrefs = page.eval_on_selector_all(
+                                        "a[href*='job_id']",
+                                        "els => els.map(e => e.href)"
+                                        ".filter(h => h.includes('job_id='))"
+                                    )
+                                    if hrefs:
+                                        job_url = hrefs[0]
+                                except Exception:
+                                    pass
+
+                            # Strategy 2: form action contains job_id (original fallback)
+                            if not job_url:
+                                try:
+                                    form_action = page.locator("form").first.get_attribute("action")
+                                    if form_action and "job_id=" in form_action:
+                                        clean = form_action.lstrip("./")
+                                        job_url = (
+                                            clean if clean.startswith("http")
+                                            else f"https://devnetjobsindia.org/{clean}"
+                                        )
+                                except Exception:
+                                    pass
+
+                            # Strategy 3: og:url meta tag
+                            if not job_url:
+                                try:
+                                    og = page.locator("meta[property='og:url']").get_attribute("content")
+                                    if og and "job_id=" in og:
+                                        job_url = og
+                                except Exception:
+                                    pass
+
+                            if job_url:
+                                current_url = job_url
+                            else:
+                                log(f"   ⚠️ Could not find a stable job URL for '{title[:55]}' — link may not work")
 
                         try:
                             title = page.locator(site['tender_title_selector']).first.text_content().strip()
@@ -98,6 +132,11 @@ class ScraperAgent:
                                 title = page.locator("h1, h2").first.text_content().strip()
                             except Exception:
                                 title = f"Result_{i+1}"
+
+                        # ── Keyword relevance check ──────────────────────────────
+                        if keyword.lower() not in title.lower():
+                            log(f"   🚫 Skipping '{title[:55]}' — keyword '{keyword}' not in title")
+                            continue
 
                         try:
                             content = page.locator(site['tender_description_selector']).first.text_content().strip()
