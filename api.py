@@ -298,6 +298,78 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb,
     return tender_dirs
 
 
+# ── Nasscom scraper (PDF-download, no search box, dedup-only) ─────────────
+
+def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
+                        result_cb=None) -> list[Path] | None:
+    from agents.nasscom_scraper_agent import NasscomScraperAgent
+    from agents.file_reader import read_file
+    from agents.excel_writer import write_level1_report
+
+    agent      = NasscomScraperAgent()
+    summarizer = SummarizerAgent()
+    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir    = DOWNLOADS_DIR / site_key / timestamp
+    tender_dirs: list[Path] = []
+
+    log_cb("🚀 Starting Nasscom Scraper...")
+
+    def on_result_ready(res):
+        title = res.get("title", "Unknown")
+        log_cb(f"📊 Summarizing: {title[:55]}...")
+
+        text_parts = []
+        for fpath in res.get("files", []):
+            try:
+                file_text = read_file(fpath)
+                if file_text and file_text.strip():
+                    fname = os.path.basename(fpath)
+                    text_parts.append(
+                        f"=== DOCUMENT: {fname} ===\n{file_text[:25_000].strip()}"
+                    )
+            except Exception as fe:
+                log_cb(f"⚠️ read_file error: {fe}")
+
+        combined = "\n\n".join(text_parts)
+        fields   = summarizer.summarize_level1(combined, log_callback=log_cb)
+
+        tender_dir = Path(res.get("tender_dir", str(run_dir)))
+        safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+        excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
+
+        record = {
+            "keyword":    res.get("keyword", ""),
+            "title":      title,
+            "url":        res.get("url", ""),
+            "site":       site_key,
+            "fields":     fields,
+            "files":      res.get("files", []),
+            "tender_dir": res.get("tender_dir", ""),
+        }
+        write_level1_report([record], excel_path)
+        tender_dirs.append(tender_dir)
+        if result_cb:
+            result_cb(record)
+        log_cb(f"✅ Saved: {excel_path}")
+
+    for kw in keywords:
+        log_cb(f"▶️ Processing keyword: {kw}")
+        agent.search(
+            kw,
+            output_dir=str(run_dir),
+            log_callback=log_cb,
+            on_result_ready=on_result_ready,
+            db=_db,
+        )
+
+    if not tender_dirs:
+        log_cb("⚠️ No results found.")
+        return None
+
+    log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
+    return tender_dirs
+
+
 # ── UNGM scraper ───────────────────────────────────────────────────────────
 
 def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
@@ -485,11 +557,25 @@ async def websocket_endpoint(
             try:
                 ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
+                # Determine scraper type from config
+                try:
+                    with open(APP_DIR / "sites_config.json") as _f:
+                        _sites_cfg = json.load(_f)
+                    _scraper_type = _sites_cfg.get(site_key, {}).get("scraper_type", "standard")
+                except Exception:
+                    _scraper_type = "standard"
+
                 if site_key == "ungm":
                     result = _run_ungm_scrape(keywords, credentials, log_cb, result_cb)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         zip_path = _make_run_zip([result], result, f"UNGM_{ts}")
+                elif _scraper_type == "nasscom":
+                    result = _run_nasscom_scrape(site_key, keywords, log_cb, result_cb)
+                    if result:
+                        log_cb("📦 Packaging all results into ZIP...")
+                        base = DOWNLOADS_DIR / site_key
+                        zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 else:
                     result = _run_standard_scrape(site_key, keywords, log_cb, result_cb)
                     if result:

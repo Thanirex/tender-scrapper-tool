@@ -276,7 +276,10 @@ def run_daily_job():
 
         # ── Phase 2+: Standard sites ───────────────────────────────────────────
         if standard_sites and not _stop_event.is_set():
-            std_agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
+            from agents.nasscom_scraper_agent import NasscomScraperAgent
+            from agents.file_reader import read_file as _read_file
+            std_agent     = ScraperAgent(str(APP_DIR / "sites_config.json"))
+            nasscom_agent = NasscomScraperAgent()
 
             for phase_idx, site_key in enumerate(standard_sites, start=2):
                 if _stop_event.is_set():
@@ -287,6 +290,8 @@ def run_daily_job():
                     f"{site_key.upper()} ({len(keywords)} keywords)"
                 )
 
+                scraper_type = sites_cfg.get(site_key, {}).get("scraper_type", "standard")
+
                 for keyword in keywords:
                     if _stop_event.is_set():
                         break
@@ -296,55 +301,126 @@ def run_daily_job():
                     )
                     _write_log(f"▶️ [{site_key.upper()}] Keyword: '{keyword}'")
 
-                    def on_std_result(res, _kw=keyword, _site=site_key):
-                        nonlocal total_tenders
-                        if _stop_event.is_set():
-                            return
+                    if scraper_type == "nasscom":
+                        # ── Nasscom: PDF-download + file-based Level 1 ─────────
+                        def on_nasscom_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
 
-                        title = res.get("title", "Unknown")
-                        _write_log(f"  📊 Summarising: {title[:70]}")
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
 
-                        fields = summarizer.summarize_level1(res.get("content", ""))
+                            text_parts = []
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
 
-                        tender_dir_abs = Path(res.get("tender_dir", ""))
-                        safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
-                        excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
 
-                        record = {
-                            "keyword":    _kw,
-                            "title":      title,
-                            "url":        res.get("url", ""),
-                            "site":       _site,
-                            "fields":     fields,
-                            "files":      [],
-                            "tender_dir": res.get("tender_dir", ""),
-                        }
-                        write_level1_report([record], excel_path)
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
 
-                        tender_dir_rel = ""
-                        try:
-                            tender_dir_rel = str(
-                                tender_dir_abs.relative_to(DOWNLOADS_DIR)
-                            ).replace("\\", "/")
-                        except ValueError:
-                            pass
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
 
-                        _db.record_cron_tender(
-                            run_id=run_id, keyword=_kw, title=title,
-                            url=res.get("url", ""), site=_site,
-                            published_date="", summary=fields,
-                            tender_dir=tender_dir_rel,
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date="", summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        nasscom_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_nasscom_result,
+                            db=proxy,
                         )
-                        total_tenders += 1
-                        _db.update_cron_run(run_id, total_tenders=total_tenders)
-                        _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                    std_agent.search(
-                        site_key, keyword,
-                        log_callback=_progress_log,
-                        on_result_ready=on_std_result,
-                        db=proxy,
-                    )
+                    else:
+                        # ── Standard search-based scraper ──────────────────────
+                        def on_std_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            fields = summarizer.summarize_level1(res.get("content", ""))
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      [],
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date="", summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        std_agent.search(
+                            site_key, keyword,
+                            log_callback=_progress_log,
+                            on_result_ready=on_std_result,
+                            db=proxy,
+                        )
+
                     keywords_done += 1
                     _db.update_cron_run(run_id, keywords_done=keywords_done)
 

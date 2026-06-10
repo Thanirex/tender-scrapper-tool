@@ -13,6 +13,11 @@
         "requires_auth": true,
         "display_name": "UNGM (UN Global Marketplace)"
     },
+    "nasscom": {
+        "url": "https://www.nasscomfoundation.org/requestproposal",
+        "scraper_type": "nasscom",
+        "skip_date_filter": true
+    },
     "afdb": {
         "search_url_template": "https://www.afdb.org/en/projects-and-operations/procurement?title={keyword}",
         "results_link_selector": ".views-field-title a",
@@ -24,6 +29,33 @@
     },
     "jobinrwanda": {
         "url": "https://www.jobinrwanda.com/jobs/tender",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobintanzania": {
+        "url": "https://www.jobintanzania.com/jobs/all",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobinuganda": {
+        "url": "https://www.jobinuganda.com/jobs/all",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobinkenya": {
+        "url": "https://www.jobinkenya.com/jobs/all",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
         "results_link_selector": "a[href*='/job/']",
