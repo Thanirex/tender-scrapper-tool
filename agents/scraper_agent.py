@@ -18,11 +18,19 @@ class ScraperAgent:
 
     def _do_search(self, page, site, keyword):
         """Navigate to site and perform a keyword search. Returns count of results."""
-        page.goto(site['url'])
-        page.wait_for_load_state("networkidle")
-        page.fill(site['search_input_selector'], keyword)
-        page.click(site['search_button_selector'])
-        page.wait_for_load_state("networkidle")
+        template = site.get("search_url_template")
+        if template:
+            # Sites that encode the keyword directly in the URL (no form submit needed)
+            url = template.replace("{keyword}", keyword)
+            page.goto(url)
+            page.wait_for_load_state("domcontentloaded")
+            page.wait_for_timeout(3000)
+        else:
+            page.goto(site['url'])
+            page.wait_for_load_state("networkidle")
+            page.fill(site['search_input_selector'], keyword)
+            page.click(site['search_button_selector'])
+            page.wait_for_load_state("networkidle")
         return page.locator(site['results_link_selector']).count()
 
     def _extract_pub_date(self, page, site) -> str | None:
@@ -60,9 +68,29 @@ class ScraperAgent:
         log(f"🔍 [Scraper] Searching {site_key} for '{keyword}'...")
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            context = browser.new_context()
-            page = context.new_page()
+            if site.get("requires_stealth"):
+                # Cloudflare-protected sites need non-headless + stealth args
+                browser = p.chromium.launch(
+                    headless=False,
+                    args=["--disable-blink-features=AutomationControlled"],
+                )
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/125.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1280, "height": 800},
+                    locale="en-US",
+                )
+                page = context.new_page()
+                page.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+                )
+            else:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context()
+                page = context.new_page()
 
             try:
                 total = self._do_search(page, site, keyword)

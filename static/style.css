@@ -1630,8 +1630,11 @@ details.advanced-settings summary {
 .site-ngobox { background: #d1fae5; color: #065f46; }
 .site-devnet { background: #dbeafe; color: #1e40af; }
 .site-taiq   { background: #ede9fe; color: #4c1d95; }
+.site-isdb        { background: #fce7f3; color: #9d174d; }
+.site-afdb        { background: #fff7ed; color: #9a3412; }
+.site-jobinrwanda { background: #ecfdf5; color: #065f46; }
 /* fallback for unknown sites */
-.site-badge:not([class*='site-ungm']):not([class*='site-ngobox']):not([class*='site-devnet']):not([class*='site-taiq']) {
+.site-badge:not([class*='site-ungm']):not([class*='site-ngobox']):not([class*='site-devnet']):not([class*='site-taiq']):not([class*='site-isdb']):not([class*='site-afdb']):not([class*='site-jobinrwanda']) {
     background: var(--primary-light);
     color: var(--primary);
 }
