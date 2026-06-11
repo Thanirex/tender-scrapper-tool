@@ -277,9 +277,15 @@ def run_daily_job():
         # ── Phase 2+: Standard sites ───────────────────────────────────────────
         if standard_sites and not _stop_event.is_set():
             from agents.nasscom_scraper_agent import NasscomScraperAgent
+            from agents.au_scraper_agent import AUScraperAgent
+            from agents.acbf_scraper_agent import ACBFScraperAgent
+            from agents.trademark_africa_scraper_agent import TradeMarkAfricaScraperAgent
             from agents.file_reader import read_file as _read_file
             std_agent     = ScraperAgent(str(APP_DIR / "sites_config.json"))
             nasscom_agent = NasscomScraperAgent()
+            au_agent      = AUScraperAgent()
+            acbf_agent    = ACBFScraperAgent()
+            tma_agent     = TradeMarkAfricaScraperAgent()
 
             for phase_idx, site_key in enumerate(standard_sites, start=2):
                 if _stop_event.is_set():
@@ -366,6 +372,209 @@ def run_daily_job():
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_nasscom_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "au":
+                        # ── African Union: list-based, direct doc download ─────
+                        def on_au_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("release_date", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        au_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_au_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "acbf":
+                        # ── ACBF: list-based, page-content-only Level 1 ────────
+                        def on_acbf_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("deadline", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        acbf_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_acbf_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "trademarkafrica":
+                        # ── TradeMark Africa: REST API + PDF download ──────────
+                        def on_tma_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("deadline", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        tma_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_tma_result,
                             db=proxy,
                         )
 

@@ -62,5 +62,23 @@
         "tender_title_selector": ".field--name-title",
         "tender_description_selector": ".field--name-field-job-full-description",
         "skip_date_filter": true
+    },
+    "au": {
+        "url": "https://au.int/en/bids",
+        "scraper_type": "au",
+        "display_name": "African Union Bids",
+        "skip_date_filter": false
+    },
+    "acbf": {
+        "url": "https://theacbf.org/join-us/procurement-and-consultancies/",
+        "scraper_type": "acbf",
+        "display_name": "ACBF Procurement & Consultancies",
+        "skip_date_filter": true
+    },
+    "trademarkafrica": {
+        "url": "https://trademarkafrica.com/procurement/",
+        "scraper_type": "trademarkafrica",
+        "display_name": "TradeMark Africa Procurement",
+        "skip_date_filter": true
     }
 }

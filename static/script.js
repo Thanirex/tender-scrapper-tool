@@ -104,7 +104,7 @@ document.addEventListener('DOMContentLoaded', () => {
         .then(res => res.json())
         .then(data => {
             siteSelect.innerHTML = data.sites.map(s => {
-                const label = s === 'ungm' ? 'UNGM (UN Global Marketplace)' : s.toUpperCase();
+                const label = s === 'ungm' ? 'UNGM (UN Global Marketplace)' : s === 'au' ? 'African Union Bids' : s === 'acbf' ? 'ACBF Procurement & Consultancies' : s === 'trademarkafrica' ? 'TradeMark Africa Procurement' : s.toUpperCase();
                 return `<option value="${s}">${label}</option>`;
             }).join('');
             serverKeywords = data.keywords;
