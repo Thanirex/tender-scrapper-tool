@@ -80,5 +80,29 @@
         "scraper_type": "trademarkafrica",
         "display_name": "TradeMark Africa Procurement",
         "skip_date_filter": true
+    },
+    "worldbank": {
+        "url": "https://wbgeprocure-rfxnow.worldbank.org/rfxnow/public/advertisement/index.html",
+        "scraper_type": "worldbank",
+        "display_name": "World Bank Group Procurement",
+        "skip_date_filter": true
+    },
+    "fhi360": {
+        "url": "https://solicitations.fhi360.org/Solicitation.aspx",
+        "scraper_type": "fhi360",
+        "display_name": "FHI 360 Solicitations",
+        "skip_date_filter": true
+    },
+    "gatsbyafrica": {
+        "url": "https://www.gatsbyafrica.org.uk/tender/",
+        "scraper_type": "gatsbyafrica",
+        "display_name": "Gatsby Africa Tenders",
+        "skip_date_filter": true
+    },
+    "afrosai": {
+        "url": "https://afrosai-e.org.za/tenders/",
+        "scraper_type": "afrosai",
+        "display_name": "AFROSAI-E Tenders",
+        "skip_date_filter": true
     }
 }
