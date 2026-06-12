@@ -284,6 +284,9 @@ def run_daily_job():
             from agents.fhi360_scraper_agent import FHI360ScraperAgent
             from agents.gatsby_africa_scraper_agent import GatsbyAfricaScraperAgent
             from agents.afrosai_scraper_agent import AfrosaiScraperAgent
+            from agents.drc_scraper_agent import DRCScraperAgent
+            from agents.jsi_scraper_agent import JSIScraperAgent
+            from agents.chai_scraper_agent import CHAIScraperAgent
             from agents.file_reader import read_file as _read_file
             std_agent          = ScraperAgent(str(APP_DIR / "sites_config.json"))
             nasscom_agent      = NasscomScraperAgent()
@@ -294,6 +297,9 @@ def run_daily_job():
             fhi360_agent       = FHI360ScraperAgent()
             gatsbyafrica_agent = GatsbyAfricaScraperAgent()
             afrosai_agent      = AfrosaiScraperAgent()
+            drc_agent          = DRCScraperAgent()
+            jsi_agent          = JSIScraperAgent()
+            chai_agent         = CHAIScraperAgent()
 
             for phase_idx, site_key in enumerate(standard_sites, start=2):
                 if _stop_event.is_set():
@@ -799,6 +805,222 @@ def run_daily_job():
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_afrosai_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "drc":
+                        # ── DRC Tenders (active + 24h published filter) ────────
+                        def on_drc_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("deadline", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        drc_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_drc_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "jsi":
+                        # ── JSI Solicitations ──────────────────────────────────
+                        def on_jsi_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("deadline", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        jsi_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_jsi_result,
+                            db=proxy,
+                        )
+
+                    elif scraper_type == "chai":
+                        # ── CHAI RFP listing, 24h filter, doc download ─────────
+                        def on_chai_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            if _stop_event.is_set():
+                                return
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            _MAX_CHARS = 25_000
+                            for fpath in res.get("files", []):
+                                try:
+                                    file_text = _read_file(fpath)
+                                    if file_text and file_text.strip():
+                                        fname = os.path.basename(fpath)
+                                        text_parts.append(
+                                            f"=== DOCUMENT: {fname} ===\n"
+                                            f"{file_text[:_MAX_CHARS].strip()}"
+                                        )
+                                except Exception as fe:
+                                    _write_log(f"  ⚠️ read_file error: {fe}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("published", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        chai_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_chai_result,
                             db=proxy,
                         )
 

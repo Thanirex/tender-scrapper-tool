@@ -1,0 +1,278 @@
+import re
+import sys
+import requests
+from pathlib import Path
+from datetime import datetime, timezone
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from paths import DOWNLOADS_DIR
+
+
+def _is_due_date_active(due_str: str) -> bool:
+    """Return True if the due date is in the future, or if we can't parse it."""
+    if not due_str:
+        return True
+    for fmt in ("%b %d, %Y, %I:%M %p", "%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            dt = datetime.strptime(due_str.strip(), fmt).replace(tzinfo=timezone.utc)
+            return dt >= datetime.now(tz=timezone.utc)
+        except ValueError:
+            continue
+    return True  # unparseable → give benefit of the doubt
+
+
+class JSIScraperAgent:
+    BASE_URL    = "https://www.jsi.org"
+    LISTING_URL = "https://www.jsi.org/partner-with-jsi/solicitations/"
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+
+        results = []
+        log(f"🔍 [JSI] Scanning for '{keyword}'...")
+
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                accept_downloads=True,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+            )
+            page = ctx.new_page()
+            try:
+                page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=45000)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10000)
+                except PlaywrightTimeout:
+                    pass
+                page.wait_for_timeout(1500)
+
+                # Collect all solicitation detail-page links + their visible title text
+                entries = page.evaluate("""
+                () => {
+                    const BASE = "https://www.jsi.org";
+                    const seen = new Set();
+                    const results = [];
+                    document.querySelectorAll('a[href*="/solicitation/"]').forEach(a => {
+                        let href = a.getAttribute('href') || '';
+                        if (!href) return;
+                        // Skip the listing root itself
+                        if (href.replace(/\\/$/, '').endsWith('/solicitations')) return;
+                        if (href.startsWith('/')) href = BASE + href;
+                        if (seen.has(href)) return;
+                        seen.add(href);
+
+                        // Title: prefer the link's own text; walk up for a heading if empty
+                        let title = a.textContent.trim();
+                        if (!title || title.length < 5) {
+                            let node = a.parentElement;
+                            for (let i = 0; i < 4 && node; i++) {
+                                const h = node.querySelector('h1,h2,h3,h4');
+                                if (h) { title = h.textContent.trim(); break; }
+                                // Also try the closest heading sibling text
+                                title = node.textContent.trim().split('\\n')[0].trim();
+                                if (title.length > 5) break;
+                                node = node.parentElement;
+                            }
+                        }
+                        if (title) results.push({ title, url: href });
+                    });
+                    return results;
+                }
+                """) or []
+
+                log(f"   ↳ {len(entries)} solicitation(s) on listing page")
+                for e in entries[:3]:
+                    log(f"   • '{e['title'][:65]}'")
+
+                kw_lower = keyword.lower()
+                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "jsi"
+
+                for entry in entries:
+                    title = entry["title"]
+                    url   = entry["url"]
+
+                    if kw_lower not in title.lower():
+                        continue
+
+                    if db and db.is_duplicate(title, url):
+                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        continue
+
+                    log(f"   📄 {title[:70]}")
+                    rec = self._extract_detail(ctx, url, keyword, title, base, log, db)
+                    if rec:
+                        results.append(rec)
+                        if on_result_ready:
+                            on_result_ready(rec)
+
+            except Exception as e:
+                log(f"❌ JSI scrape error: {e}")
+            finally:
+                browser.close()
+
+        return results
+
+    # ── Detail page ────────────────────────────────────────────────────────
+
+    def _extract_detail(self, ctx, url, keyword, list_title, base_dir, log, db=None):
+        detail = ctx.new_page()
+        try:
+            detail.goto(url, wait_until="domcontentloaded", timeout=45000)
+            try:
+                detail.wait_for_load_state("networkidle", timeout=10000)
+            except PlaywrightTimeout:
+                pass
+            detail.wait_for_timeout(1500)
+
+            # ── Title (more accurate than listing text) ───────────────────
+            title = list_title
+            for sel in ["h1", "h2.entry-title", "h2"]:
+                try:
+                    t = detail.locator(sel).first.text_content(timeout=3000).strip()
+                    if t and len(t) > 5:
+                        title = t
+                        break
+                except Exception:
+                    pass
+
+            # ── Full page text ────────────────────────────────────────────
+            try:
+                body_text = detail.locator("body").text_content() or ""
+                body_text = re.sub(r"[ \t]+", " ", body_text)
+                body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
+            except Exception:
+                body_text = ""
+
+            # ── Active check: parse "Due Date" from page text ─────────────
+            due_match = re.search(
+                r'due\s+date\s*[:\-]?\s*([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}(?:,\s*\d{1,2}:\d{2}\s*[AP]M)?)',
+                body_text, re.IGNORECASE
+            )
+            due_str = due_match.group(1).strip() if due_match else ""
+            if due_str and not _is_due_date_active(due_str):
+                log(f"      ⏭ Solicitation closed (due {due_str}): {title[:55]}")
+                return None
+
+            # ── Collect RFP / document links ──────────────────────────────
+            doc_links = detail.evaluate("""
+            () => {
+                const seen = new Set();
+                const links = [];
+                document.querySelectorAll('a[href]').forEach(a => {
+                    const h = a.href || '';
+                    const t = a.textContent.trim();
+                    if (!h || seen.has(h)) return;
+                    // Accept: JSI solicitations CDN, PDF/doc files, links labelled RFP/download
+                    const isSolCDN = /solicitations\\.jsi\\.(com|org)/i.test(h);
+                    const isFile   = /\\.(pdf|docx?|xlsx?|zip)(\\?|$)/i.test(h);
+                    const isRFP    = /rfp|rfq|download|solicitation/i.test(t);
+                    if (isSolCDN || isFile || isRFP) {
+                        seen.add(h);
+                        links.push({ href: h, text: t });
+                    }
+                });
+                return links;
+            }
+            """) or []
+
+            log(f"      📎 {len(doc_links)} document link(s) found")
+            for d in doc_links:
+                log(f"         → '{d['text'][:50]}' — {d['href'][-70:]}")
+
+            safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
+            safe_title = re.sub(r'[\\/*?:"<>|]',   "_", title)[:35].strip("_. ")
+            tender_dir = base_dir / safe_kw / safe_title
+            tender_dir.mkdir(parents=True, exist_ok=True)
+
+            downloaded = []
+            for doc in doc_links:
+                saved = self._download_doc(doc["href"], tender_dir, log)
+                if saved:
+                    downloaded.append(saved)
+
+            # Save page text alongside documents
+            if body_text:
+                txt_path = tender_dir / "page_content.txt"
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(f"Source: {url}\n\n{body_text}")
+                if not downloaded:
+                    downloaded.append(str(txt_path))
+                    log(f"      📝 No files — saved page text only")
+                else:
+                    log(f"      📝 Page text also saved")
+
+            if db:
+                db.mark_downloaded(title, url, "jsi", keyword, due_str)
+
+            return {
+                "keyword":    keyword,
+                "title":      title,
+                "url":        url,
+                "page_text":  body_text,
+                "files":      downloaded,
+                "tender_dir": str(tender_dir),
+                "site":       "jsi",
+                "deadline":   due_str,
+            }
+
+        except Exception as e:
+            log(f"      ❌ Extraction error: {e}")
+            return None
+        finally:
+            try:
+                detail.close()
+            except Exception:
+                pass
+
+    # ── Download helper ────────────────────────────────────────────────────
+
+    def _download_doc(self, url: str, tender_dir: Path, log) -> "str | None":
+        try:
+            resp = requests.get(
+                url, timeout=60, stream=True, allow_redirects=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/pdf,application/octet-stream,*/*",
+                },
+            )
+            resp.raise_for_status()
+
+            content_type = resp.headers.get("content-type", "")
+            if "text/html" in content_type:
+                log(f"      ⚠️ HTML response for {url[-50:]} — skipping")
+                return None
+
+            # Determine filename from Content-Disposition or URL
+            fname = ""
+            cd = resp.headers.get("content-disposition", "")
+            m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';\r\n]+)', cd, re.IGNORECASE)
+            if m:
+                fname = m.group(1).strip().strip('"\'')
+            if not fname:
+                fname = url.rstrip("/").split("/")[-1].split("?")[0]
+            if not fname or "." not in fname:
+                # Guess extension from content-type
+                ext = ".pdf" if "pdf" in content_type else ".zip" if "zip" in content_type else ".bin"
+                fname = "document" + ext
+
+            safe_stem = re.sub(r'[\\/*?:"<>|]', "_", Path(fname).stem)[:55]
+            safe_ext  = Path(fname).suffix[:10] or ".pdf"
+            out_path  = tender_dir / (safe_stem + safe_ext)
+
+            with open(out_path, "wb") as f:
+                for chunk in resp.iter_content(8192):
+                    f.write(chunk)
+            log(f"      💾 {safe_stem + safe_ext}")
+            return str(out_path)
+        except Exception as e:
+            log(f"      ⚠️ Download failed ({url[-60:]}): {e}")
+            return None

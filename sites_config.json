@@ -104,5 +104,23 @@
         "scraper_type": "afrosai",
         "display_name": "AFROSAI-E Tenders",
         "skip_date_filter": true
+    },
+    "drc": {
+        "url": "https://drc.ngo/en/tenders/",
+        "scraper_type": "drc",
+        "display_name": "DRC Tenders",
+        "skip_date_filter": false
+    },
+    "jsi": {
+        "url": "https://www.jsi.org/partner-with-jsi/solicitations/",
+        "scraper_type": "jsi",
+        "display_name": "JSI Solicitations",
+        "skip_date_filter": true
+    },
+    "chai": {
+        "url": "https://www.clintonhealthaccess.org/resource-center/?_sft_category=rfp&sort_order=date+desc",
+        "scraper_type": "chai",
+        "display_name": "Clinton Health Access Initiative (RFPs)",
+        "skip_date_filter": false
     }
 }
