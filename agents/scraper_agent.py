@@ -69,9 +69,8 @@ class ScraperAgent:
 
         with sync_playwright() as p:
             if site.get("requires_stealth"):
-                # Cloudflare-protected sites need non-headless + stealth args
                 browser = p.chromium.launch(
-                    headless=False,
+                    headless=True,
                     args=["--disable-blink-features=AutomationControlled"],
                 )
                 context = browser.new_context(
