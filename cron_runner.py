@@ -19,13 +19,23 @@ _log_file_path: "str | None" = None
 _log_lock       = threading.Lock()   # protects buffer writes
 
 
-class _StopRequested(Exception):
-    """Raised inside on_tender_ready to abort a running cron job."""
+class _StopRequested(BaseException):
+    """Raised to abort a running cron job.
+
+    Inherits BaseException (not Exception) on purpose: every scraper agent
+    wraps its work in broad `except Exception` blocks, which would otherwise
+    swallow the stop signal and keep the run going until the site finished.
+    """
 
 
 def request_stop():
     _stop_event.set()
     _write_log("⏹ Stop requested via dashboard")
+
+
+def _check_stop():
+    if _stop_event.is_set():
+        raise _StopRequested("Stop requested by superadmin")
 
 
 def get_current_run_id() -> "int | None":
@@ -158,6 +168,9 @@ def run_daily_job():
     # ── Shared log callback (used by both UNGM and standard agents) ────────────
     def _progress_log(msg: str):
         nonlocal keywords_done
+        # Agents emit a log line every few seconds, so raising here aborts a
+        # running scrape mid-website instead of waiting for all its keywords.
+        _check_stop()
         logger.info(f"[TAiQ Cron] {msg}")
         _write_log(msg)
         # UNGM agent emits this pattern — update current_keyword + keywords_done
@@ -169,6 +182,17 @@ def run_daily_job():
             keywords_done += 1
             _db.update_cron_run(run_id, keywords_done=keywords_done)
 
+    def _run_step_safely(label: str, fn):
+        """Run one site/keyword scrape step. A crash in one site must not
+        abort the whole daily run — log it and move on to the next step.
+        (_StopRequested is a BaseException so it still passes through.)"""
+        try:
+            fn()
+        except Exception as step_err:
+            msg = f"{type(step_err).__name__}: {step_err}"
+            _write_log(f"  ❌ {label} scrape error: {msg} — continuing with next step")
+            logger.error(f"[TAiQ Cron] {label} scrape error: {msg}")
+
     try:
         # ── Phase 1: UNGM ──────────────────────────────────────────────────────
         ungm_run_dir = run_dir / "ungm"
@@ -176,8 +200,7 @@ def run_daily_job():
 
         def on_ungm_tender_ready(res: dict):
             nonlocal total_tenders
-            if _stop_event.is_set():
-                raise _StopRequested("Stop requested by superadmin")
+            _check_stop()
 
             title = res["title"]
             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -263,16 +286,14 @@ def run_daily_job():
             total_tenders += 1
             _db.update_cron_run(run_id, total_tenders=total_tenders)
             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
-
-            if _stop_event.is_set():
-                raise _StopRequested("Stop requested by superadmin")
+            _check_stop()
 
         ungm_agent = UNGMScraperAgent()
-        ungm_agent.scrape(
+        _run_step_safely("UNGM", lambda: ungm_agent.scrape(
             email, password, keywords, str(ungm_run_dir),
             headless=True, log_callback=_progress_log,
             on_tender_ready=on_ungm_tender_ready, db=proxy,
-        )
+        ))
 
         # ── Phase 2+: Standard sites ───────────────────────────────────────────
         if standard_sites and not _stop_event.is_set():
@@ -325,8 +346,7 @@ def run_daily_job():
                         # ── Nasscom: PDF-download + file-based Level 1 ─────────
                         def on_nasscom_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -381,20 +401,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        nasscom_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: nasscom_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_nasscom_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "au":
                         # ── African Union: list-based, direct doc download ─────
                         def on_au_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -453,20 +472,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        au_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: au_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_au_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "acbf":
                         # ── ACBF: list-based, page-content-only Level 1 ────────
                         def on_acbf_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -512,20 +530,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        acbf_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: acbf_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_acbf_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "trademarkafrica":
                         # ── TradeMark Africa: REST API + PDF download ──────────
                         def on_tma_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -584,20 +601,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        tma_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: tma_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_tma_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "fhi360":
                         # ── FHI 360 Solicitations ──────────────────────────────
                         def on_fhi360_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -656,20 +672,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        fhi360_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: fhi360_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_fhi360_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "gatsbyafrica":
                         # ── Gatsby Africa Tenders ──────────────────────────────
                         def on_gatsby_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -728,20 +743,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        gatsbyafrica_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: gatsbyafrica_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_gatsby_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "afrosai":
                         # ── AFROSAI-E Tenders ──────────────────────────────────
                         def on_afrosai_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -800,20 +814,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        afrosai_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: afrosai_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_afrosai_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "drc":
                         # ── DRC Tenders (active + 24h published filter) ────────
                         def on_drc_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -872,20 +885,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        drc_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: drc_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_drc_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "jsi":
                         # ── JSI Solicitations ──────────────────────────────────
                         def on_jsi_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -944,20 +956,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        jsi_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: jsi_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_jsi_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "chai":
                         # ── CHAI RFP listing, 24h filter, doc download ─────────
                         def on_chai_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -1016,20 +1027,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        chai_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: chai_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_chai_result,
                             db=proxy,
-                        )
+                        ))
 
                     elif scraper_type == "worldbank":
                         # ── World Bank Group Procurement ───────────────────────
                         def on_wb_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -1088,20 +1098,19 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        wb_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: wb_agent.search(
                             keyword,
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_wb_result,
                             db=proxy,
-                        )
+                        ))
 
                     else:
                         # ── Standard search-based scraper ──────────────────────
                         def on_std_result(res, _kw=keyword, _site=site_key):
                             nonlocal total_tenders
-                            if _stop_event.is_set():
-                                return
+                            _check_stop()
 
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
@@ -1141,12 +1150,12 @@ def run_daily_job():
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
                             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
 
-                        std_agent.search(
+                        _run_step_safely(site_key.upper(), lambda: std_agent.search(
                             site_key, keyword,
                             log_callback=_progress_log,
                             on_result_ready=on_std_result,
                             db=proxy,
-                        )
+                        ))
 
                     keywords_done += 1
                     _db.update_cron_run(run_id, keywords_done=keywords_done)
@@ -1181,6 +1190,22 @@ def run_daily_job():
             logger.info(
                 f"[TAiQ Cron] Run #{run_id} complete — {total_tenders} tenders found"
             )
+
+    except _StopRequested:
+        finished_at = datetime.now().isoformat(timespec="seconds")
+        _write_log(
+            f"⏹ Run stopped mid-scrape — {keywords_done}/{total_kw} keywords, "
+            f"{total_tenders} tenders saved"
+        )
+        _db.update_cron_run(
+            run_id, status="stopped", finished_at=finished_at,
+            keywords_done=keywords_done, current_keyword="",
+            total_tenders=total_tenders,
+        )
+        logger.info(
+            f"[TAiQ Cron] Run #{run_id} stopped mid-scrape — "
+            f"{keywords_done}/{total_kw} keywords, {total_tenders} tenders"
+        )
 
     except Exception as e:
         import traceback

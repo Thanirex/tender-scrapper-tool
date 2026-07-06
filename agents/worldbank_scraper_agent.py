@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 # Suppress InsecureRequestWarning for verify=False fallback
 import urllib3
@@ -76,8 +77,8 @@ class WorldBankScraperAgent:
                         continue
 
                     # Keyword match against full row text (covers all columns)
-                    searchable = raw_text.lower() if raw_text else title.lower()
-                    if keyword.lower() not in searchable:
+                    searchable = raw_text if raw_text else title
+                    if not keyword_matches(keyword, searchable):
                         skipped += 1
                         continue
 

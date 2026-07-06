@@ -1247,6 +1247,7 @@ details.advanced-settings summary {
 .scard-ngobox::after { background: #10b981; }
 .scard-taiq::after   { background: #7c3aed; }
 .scard-runs::after   { background: #64748b; }
+.scard-lastupdate::after { background: #0ea5e9; }
 
 .sc2-icon { font-size: 1.15rem; line-height: 1; margin-bottom: 0.1rem; }
 
@@ -1282,6 +1283,24 @@ details.advanced-settings summary {
 .scard-ngobox .sc2-bar-fill { background: #10b981; }
 .scard-taiq   .sc2-bar-fill { background: #7c3aed; }
 .scard-runs   .sc2-bar-fill { background: #64748b; }
+
+/* ── "Last Tender Update" card ───────────────────────────────────────────── */
+.sc2-num-time { font-size: 1.55rem; letter-spacing: -0.5px; }
+.lu-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    margin-top: 0.45rem;
+}
+.lu-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
 
 /* ── Summary sentence ────────────────────────────────────────────────────── */
 .dash-summary-sentence {

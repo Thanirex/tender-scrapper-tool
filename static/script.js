@@ -420,6 +420,8 @@ document.addEventListener('DOMContentLoaded', () => {
         ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
 
+            if (msg.type === 'ping') return; // server keepalive — ignore
+
             if (msg.type === 'log') {
                 const raw = msg.message;
                 const friendly = toFriendlyMsg(raw);

@@ -40,7 +40,12 @@ class SummarizerAgent:
             print("⚠️ WARNING: Invalid or missing GEMINI_API_KEY in .env. Falling back to dummy mode.")
             self.client = None
         else:
-            self.client = genai.Client(api_key=api_key)
+            # timeout is in milliseconds — without it a hung Gemini call
+            # blocks the whole scrape run indefinitely
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=genai_types.HttpOptions(timeout=120_000),
+            )
 
     # ── Public methods ────────────────────────────────────────────────────────
 

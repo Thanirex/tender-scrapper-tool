@@ -127,7 +127,7 @@ async def taiq_stop(
     db.request_cron_stop(run["id"])
     cron_runner.request_stop()
     return {"ok": True, "run_id": run["id"],
-            "message": "Stop signal sent — job will finish current tender then halt"}
+            "message": "Stop signal sent — job will halt within a few seconds"}
 
 
 @router.post("/run")

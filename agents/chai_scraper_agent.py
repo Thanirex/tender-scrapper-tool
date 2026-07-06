@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist, extract_date_from_text
+from keyword_utils import keyword_matches
 
 # JS to collect RFP entries from the CHAI resource-center listing page.
 # The page is pre-filtered to RFPs sorted by date desc via URL query params.
@@ -119,8 +120,7 @@ class CHAIScraperAgent:
                 for r in rows[:3]:
                     log(f"   • '{r['title'][:65]}' [{r.get('published','(no date)')}]")
 
-                kw_lower = keyword.lower()
-                base     = Path(output_dir) if output_dir else DOWNLOADS_DIR / "chai"
+                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "chai"
 
                 for row in rows:
                     title     = row["title"]
@@ -128,7 +128,7 @@ class CHAIScraperAgent:
                     published = row.get("published", "")
 
                     # ── Keyword filter ──────────────────────────────────────
-                    if kw_lower not in title.lower():
+                    if not keyword_matches(keyword, title):
                         continue
 
                     # ── 24-hour publication check (listing datetime attr) ───

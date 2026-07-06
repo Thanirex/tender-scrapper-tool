@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from date_utils import is_within_24h_ist, extract_date_from_text
+from keyword_utils import keyword_matches
 
 # Lift this number to raise the per-keyword tender cap
 RESULTS_CAP = 10
@@ -246,7 +247,7 @@ class UNGMScraperAgent:
             log(f"      📋 {title[:70]}")
 
             # ── Keyword relevance check ──────────────────────────────────────
-            if keyword.lower() not in title.lower():
+            if not keyword_matches(keyword, title):
                 log(f"      🚫 Skipping '{title[:60]}' — keyword '{keyword}' not in title")
                 return None
 

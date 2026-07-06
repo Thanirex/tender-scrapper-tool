@@ -1419,7 +1419,23 @@ async def websocket_endpoint(
         _db.log_activity(user_id, username, "scrape_start",
                          details={"site": site_key, "keywords": keywords})
 
-        await asyncio.to_thread(run_scrape)
+        async def _keepalive():
+            # Slow sites (e.g. AfDB re-navigates the results list for every
+            # row) can go 30-60s without emitting anything. Idle proxies and
+            # tunnels then drop the socket, which the browser reports as
+            # "Connection closed unexpectedly". Ping every 20s to keep it open.
+            try:
+                while True:
+                    await asyncio.sleep(20)
+                    await websocket.send_json({"type": "ping"})
+            except Exception:
+                pass
+
+        keepalive_task = asyncio.create_task(_keepalive())
+        try:
+            await asyncio.to_thread(run_scrape)
+        finally:
+            keepalive_task.cancel()
 
     except WebSocketDisconnect:
         print("Client disconnected")

@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 
 class NasscomScraperAgent:
@@ -43,7 +44,7 @@ class NasscomScraperAgent:
                         if not title:
                             continue
 
-                        if keyword.lower() not in title.lower():
+                        if not keyword_matches(keyword, title):
                             continue
 
                         # All PDF links in this <li> — take the last one (main doc, not cover letter)

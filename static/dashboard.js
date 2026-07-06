@@ -32,14 +32,50 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── TAiQ status widget ─────────────────────────────────────────────────
     let taiqPollTimer = null;
+    let latestTaiqRun = null;
 
     async function loadTaiqStatus() {
         const res = await authFetch('/taiq/status');
         if (!res) return;
         const { run } = await res.json();
+        latestTaiqRun = run;
         renderTaiqWidget(run);
+        // Refresh the "Last Tender Update" stat card in place (stats row may
+        // have been rendered before this poll returned)
+        const luCard = document.getElementById('last-update-card');
+        if (luCard) luCard.outerHTML = _lastUpdateCardHtml();
         clearInterval(taiqPollTimer);
         taiqPollTimer = setInterval(loadTaiqStatus, run && run.status === 'running' ? 8000 : 60000);
+    }
+
+    // ── "Last Tender Update" stat card ─────────────────────────────────────
+    function _lastUpdateCardHtml() {
+        const r = latestTaiqRun;
+        let timeStr = '—', dateStr = 'No runs yet', statusLbl = '—', color = '#94a3b8';
+        if (r) {
+            const isRunning = r.status === 'running';
+            const iso = (isRunning ? r.started_at : (r.finished_at || r.started_at)) || '';
+            if (iso.includes('T')) {
+                dateStr = _pretty(iso.split('T')[0]);
+                timeStr = iso.split('T')[1].substring(0, 5);
+            }
+            const map = {
+                running:  ['Running',   '#f59e0b'],
+                complete: ['Completed', '#22c55e'],
+                failed:   ['Failed',    '#ef4444'],
+                stopped:  ['Stopped',   '#a855f7'],
+            };
+            [statusLbl, color] = map[r.status] || [r.status, '#94a3b8'];
+        }
+        return `
+            <div class="stat-card-v2 scard-lastupdate" id="last-update-card">
+                <div class="sc2-icon">🕒</div>
+                <span class="sc2-num sc2-num-time">${timeStr}</span>
+                <span class="sc2-label">Last Tender Update · ${dateStr}</span>
+                <span class="lu-status" style="color:${color}">
+                    <span class="lu-status-dot" style="background:${color}"></span>${statusLbl}
+                </span>
+            </div>`;
     }
 
     function renderTaiqWidget(run) {
@@ -178,12 +214,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (siteTotals.length === 0) {
             statsRow.innerHTML = `
-                <div class="stat-card-v2 scard-runs" style="grid-column:1/-1;text-align:center">
+                <div class="stat-card-v2 scard-runs" style="text-align:center">
                     <div class="sc2-icon">📋</div>
                     <span class="sc2-num">0</span>
                     <span class="sc2-label">No activity for this date</span>
                     <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:0%"></div></div>
-                </div>`;
+                </div>` + _lastUpdateCardHtml();
         } else {
             allSites = new Set(siteTotals.map(s => s.site));
 
@@ -215,7 +251,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
                 </div>`;
 
-            statsRow.innerHTML = totalCard + siteCards + runsCard;
+            statsRow.innerHTML = totalCard + siteCards + runsCard + _lastUpdateCardHtml();
 
             filterSite.innerHTML = '<option value="">All Sites</option>' +
                 [...allSites].map(s => {

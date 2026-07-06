@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 # Page is built with Elementor. Each tender entry sits in its own inner
 # container (e-con / elementor-column) which holds sibling widgets:
@@ -138,14 +139,13 @@ class AfrosaiScraperAgent:
                     log(f"   • '{t['title'][:65]}' | files={len(t['links'])}")
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "afrosai"
-                kw_lower = keyword.lower()
 
                 for tender in tenders:
                     title = tender["title"]
                     text  = tender["text"]
                     links = tender["links"]
 
-                    if kw_lower not in title.lower() and kw_lower not in text.lower():
+                    if not keyword_matches(keyword, title, text):
                         continue
 
                     url = links[0] if links else self.PAGE_URL

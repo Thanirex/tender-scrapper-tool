@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 _JS_DIAG = """
 () => ({
@@ -147,7 +148,7 @@ class FHI360ScraperAgent:
                     text  = sol["text"]
                     links = sol["links"]
 
-                    if keyword.lower() not in title.lower() and keyword.lower() not in text.lower():
+                    if not keyword_matches(keyword, title, text):
                         continue
 
                     url = links[0] if links else self.PAGE_URL

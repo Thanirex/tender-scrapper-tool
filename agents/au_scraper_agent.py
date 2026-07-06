@@ -8,6 +8,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from date_utils import is_within_24h_ist
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 
 class AUScraperAgent:
@@ -43,7 +44,7 @@ class AUScraperAgent:
                     url          = bid["url"]
                     release_date = bid["release_date"]
 
-                    if keyword.lower() not in title.lower():
+                    if not keyword_matches(keyword, title):
                         continue
 
                     if release_date:

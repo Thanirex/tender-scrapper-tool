@@ -6,6 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 RESULTS_CAP = 20
 
@@ -34,7 +35,7 @@ class TradeMarkAfricaScraperAgent:
                 if not title or not url:
                     continue
 
-                if keyword.lower() not in title.lower():
+                if not keyword_matches(keyword, title):
                     continue
 
                 if db and db.is_duplicate(title, url):

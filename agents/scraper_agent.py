@@ -3,12 +3,14 @@ import re
 import os
 import sys
 from pathlib import Path
+from urllib.parse import quote
 from playwright.sync_api import sync_playwright
 
 # Resolve paths / utils from app root regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist, extract_date_from_text
+from keyword_utils import keyword_matches
 
 
 class ScraperAgent:
@@ -21,7 +23,7 @@ class ScraperAgent:
         template = site.get("search_url_template")
         if template:
             # Sites that encode the keyword directly in the URL (no form submit needed)
-            url = template.replace("{keyword}", keyword)
+            url = template.replace("{keyword}", quote(keyword))
             page.goto(url)
             page.wait_for_load_state("domcontentloaded")
             page.wait_for_timeout(3000)
@@ -32,6 +34,19 @@ class ScraperAgent:
             page.click(site['search_button_selector'])
             page.wait_for_load_state("networkidle")
         return page.locator(site['results_link_selector']).count()
+
+    def _goto_result(self, page, url: str, log) -> bool:
+        """Open a result page directly, waiting out bot-protection interstitials
+        (Cloudflare shows 'Just a moment...' on rapid repeat visits)."""
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.wait_for_timeout(2000)
+        for _ in range(3):
+            title = (page.title() or "").lower()
+            if "just a moment" not in title and "attention required" not in title:
+                return True
+            page.wait_for_timeout(5000)
+        log(f"   ⚠️ Bot-protection page blocked access to: {url[:80]}")
+        return False
 
     def _extract_pub_date(self, page, site) -> str | None:
         """
@@ -95,16 +110,41 @@ class ScraperAgent:
                 total = self._do_search(page, site, keyword)
                 log(f"   ↳ Found {total} results.")
 
+                # URL-template sites (e.g. AfDB) expose stable result hrefs —
+                # collect them once and open each directly. Re-running the
+                # search for every row triggers Cloudflare's "Just a moment"
+                # challenge on repeat visits, which used to return 0 links and
+                # silently abort the loop before processing a single result.
+                hrefs = []
+                if site.get("search_url_template"):
+                    try:
+                        hrefs = [
+                            h for h in page.eval_on_selector_all(
+                                site['results_link_selector'],
+                                "els => els.map(e => e.href)",
+                            ) if h
+                        ]
+                    except Exception:
+                        hrefs = []
+
                 for i in range(total):
                     try:
-                        self._do_search(page, site, keyword)
+                        if hrefs:
+                            if i >= len(hrefs):
+                                break
+                            if not self._goto_result(page, hrefs[i], log):
+                                continue
+                        else:
+                            self._do_search(page, site, keyword)
 
-                        links = page.locator(site['results_link_selector']).all()
-                        if i >= len(links):
-                            break
+                            links = page.locator(site['results_link_selector']).all()
+                            if i >= len(links):
+                                log(f"   ⚠️ Re-search returned only {len(links)} link(s), "
+                                    f"expected {total} — stopping early")
+                                break
 
-                        links[i].click()
-                        page.wait_for_load_state("networkidle")
+                            links[i].click()
+                            page.wait_for_load_state("networkidle")
                         current_url = page.url
 
                         # DevNet uses ASP.NET postbacks — page.url never changes after click.
@@ -161,7 +201,7 @@ class ScraperAgent:
                                 title = f"Result_{i+1}"
 
                         # ── Keyword relevance check ──────────────────────────────
-                        if keyword.lower() not in title.lower():
+                        if not keyword_matches(keyword, title):
                             log(f"   🚫 Skipping '{title[:55]}' — keyword '{keyword}' not in title")
                             continue
 

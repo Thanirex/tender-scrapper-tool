@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist
+from keyword_utils import keyword_matches
 
 # JS to scrape all tender entries from the DRC listing page.
 # Page uses <article class="tenderList__item"> with data-* attributes
@@ -75,8 +76,7 @@ class DRCScraperAgent:
                 rows = page.evaluate(_JS_LIST) or []
                 log(f"   ↳ {len(rows)} tender row(s) on listing page")
 
-                kw_lower = keyword.lower()
-                base     = Path(output_dir) if output_dir else DOWNLOADS_DIR / "drc"
+                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "drc"
 
                 for row in rows:
                     title     = row["title"]
@@ -86,7 +86,7 @@ class DRCScraperAgent:
                     status    = row.get("status", "")
 
                     # ── Keyword filter ────────────────────────────────────────
-                    if kw_lower not in title.lower():
+                    if not keyword_matches(keyword, title):
                         continue
 
                     # ── Active check — skip archived/expired tenders ──────────

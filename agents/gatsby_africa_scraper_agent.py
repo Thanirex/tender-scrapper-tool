@@ -6,6 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 
 class GatsbyAfricaScraperAgent:
@@ -183,11 +184,10 @@ class GatsbyAfricaScraperAgent:
                     return res;
                 }"""
             )
-            kw = keyword.lower()
             return [
                 {"title": t["ctxTitle"] or t["title"], "url": t["url"]}
                 for t in all_links
-                if kw in (t["title"] + " " + t["ctxTitle"] + " " + t["url"]).lower()
+                if keyword_matches(keyword, t["title"], t["ctxTitle"], t["url"])
             ]
         except Exception:
             return []

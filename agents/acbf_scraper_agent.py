@@ -5,6 +5,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 
 class ACBFScraperAgent:
@@ -38,7 +39,7 @@ class ACBFScraperAgent:
                     if not title or not url:
                         continue
 
-                    if keyword.lower() not in title.lower():
+                    if not keyword_matches(keyword, title):
                         continue
 
                     if db and db.is_duplicate(title, url):

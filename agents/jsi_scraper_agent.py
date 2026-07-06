@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
+from keyword_utils import keyword_matches
 
 
 def _is_due_date_active(due_str: str) -> bool:
@@ -93,14 +94,13 @@ class JSIScraperAgent:
                 for e in entries[:3]:
                     log(f"   • '{e['title'][:65]}'")
 
-                kw_lower = keyword.lower()
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "jsi"
 
                 for entry in entries:
                     title = entry["title"]
                     url   = entry["url"]
 
-                    if kw_lower not in title.lower():
+                    if not keyword_matches(keyword, title):
                         continue
 
                     if db and db.is_duplicate(title, url):
