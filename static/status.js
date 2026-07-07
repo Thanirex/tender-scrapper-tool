@@ -11,6 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
     let tenders      = [];
     let current      = null;                    // tender open in the modal
     let searchTimer  = null;
+    let sortKey      = 'found_at';
+    let sortDir      = -1;                      // -1 desc, 1 asc
 
     // ── Elements ───────────────────────────────────────────────────────────
     const monthLabel  = document.getElementById('rv-month-label');
@@ -19,7 +21,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const filterLabel = document.getElementById('rv-filter-label');
     const searchInput = document.getElementById('rv-search');
     const countLbl    = document.getElementById('rv-count-lbl');
-    const listEl      = document.getElementById('rv-list');
+    const tbodyEl     = document.getElementById('rv-tbody');
+    const sortHeaders = Array.from(document.querySelectorAll('.rv-th-sort'));
 
     const overlay     = document.getElementById('rv-modal-overlay');
     const mBadge      = document.getElementById('rvm-badge');
@@ -62,6 +65,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }, 300);
     });
 
+    sortHeaders.forEach(th => th.addEventListener('click', () => {
+        const key = th.dataset.sort;
+        if (sortKey === key) { sortDir = -sortDir; }
+        else                 { sortKey = key; sortDir = key === 'found_at' ? -1 : 1; }
+        _renderTable();
+    }));
+
     mClose.addEventListener('click', closeModal);
     overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
     document.addEventListener('keydown', e => {
@@ -103,8 +113,24 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('rv-num-approved').textContent = data.approved ?? 0;
             document.getElementById('rv-num-rejected').textContent = data.rejected ?? 0;
             document.getElementById('rv-num-pending').textContent  = data.pending  ?? 0;
+            _renderMetrics(data);
             _renderTrend(data.months || []);
         } catch { /* leave placeholders */ }
+    }
+
+    function _renderMetrics(d) {
+        const reviewed = document.getElementById('rv-m-reviewed');
+        const avgtime  = document.getElementById('rv-m-avgtime');
+        const rate     = document.getElementById('rv-m-rate');
+
+        reviewed.textContent = d.scraped ? `${d.decided ?? 0} of ${d.scraped}` : '—';
+
+        if (d.avg_review_hours == null)      avgtime.textContent = '—';
+        else if (d.avg_review_hours < 1)     avgtime.textContent = `${Math.round(d.avg_review_hours * 60)} min`;
+        else if (d.avg_review_hours < 48)    avgtime.textContent = `${d.avg_review_hours} hrs`;
+        else avgtime.textContent = `${(d.avg_review_hours / 24).toFixed(1)} days`;
+
+        rate.textContent = d.approval_rate == null ? '—' : `${d.approval_rate}%`;
     }
 
     function _renderTrend(months) {
@@ -117,14 +143,14 @@ document.addEventListener('DOMContentLoaded', () => {
             const h  = x => Math.round((x / max) * 100);
             const on = m.month === month ? ' rv-bar-current' : '';
             return `
-                <div class="rv-bar-col${on}" data-month="${m.month}" title="${_prettyMonth(m.month)} — ${m.scraped} scraped, ${m.approved} approved, ${m.rejected} rejected">
+                <div class="rv-bar-col${on}" data-month="${m.month}" title="${_prettyMonth(m.month)} — ${m.scraped} scraped · ${m.approved} approved · ${m.rejected} rejected · ${m.pending} pending">
+                    <span class="rv-bar-num">${m.scraped}</span>
                     <div class="rv-bar-stack">
                         <div class="rv-bar-seg rv-seg-pending"  style="height:${h(m.pending)}%"></div>
                         <div class="rv-bar-seg rv-seg-rejected" style="height:${h(m.rejected)}%"></div>
                         <div class="rv-bar-seg rv-seg-approved" style="height:${h(m.approved)}%"></div>
                     </div>
-                    <span class="rv-bar-lbl">${_shortMonth(m.month)}</span>
-                    <span class="rv-bar-num">${m.scraped}</span>
+                    <span class="rv-bar-lbl">${_shortMonth(m.month).toUpperCase()}</span>
                 </div>`;
         }).join('');
         // Clicking a trend bar jumps to that month
@@ -136,9 +162,9 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // ── Tender list ────────────────────────────────────────────────────────
+    // ── Tender table ───────────────────────────────────────────────────────
     async function loadList() {
-        listEl.innerHTML = '<p class="empty-msg">Loading…</p>';
+        tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">Loading…</td></tr>';
         try {
             let url = `/review/tenders?month=${month}`;
             if (statusFilter) url += `&status=${statusFilter}`;
@@ -148,43 +174,68 @@ document.addEventListener('DOMContentLoaded', () => {
             const data = await res.json();
             tenders = data.tenders || [];
             countLbl.textContent = `${tenders.length} tender${tenders.length === 1 ? '' : 's'}`;
-            if (!tenders.length) {
-                listEl.innerHTML = '<p class="empty-msg">No tenders match this view.</p>';
-                return;
-            }
-            listEl.innerHTML = tenders.map(_rowHtml).join('');
-            listEl.querySelectorAll('.rv-row').forEach(row => {
-                row.addEventListener('click', () =>
-                    openModal(row.dataset.source, parseInt(row.dataset.id, 10)));
-            });
+            _renderTable();
         } catch {
-            listEl.innerHTML = '<p class="empty-msg">Could not load tenders.</p>';
+            tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">Could not load tenders.</td></tr>';
         }
     }
 
-    function _rowHtml(t) {
-        const st   = t.review_status || 'pending';
-        const icon = st === 'approved' ? '✅' : st === 'rejected' ? '❌' : '⏳';
-        // Regular users don't receive reviewer names (server redacts them)
-        const byWho = t.reviewed_by_name
-            ? ` by <strong>${_esc(t.reviewed_by_name)}</strong>` : '';
-        const who  = st === 'pending'
-            ? '<span class="rv-row-who rv-row-pending">awaiting review</span>'
-            : `<span class="rv-row-who">${st}${byWho} · ${_prettyDT(t.reviewed_at)}</span>`;
+    const _STATUS_ORDER = { pending: 0, rejected: 1, approved: 2 };
+
+    function _renderTable() {
+        // Sort indicator on headers
+        sortHeaders.forEach(th => {
+            th.classList.toggle('sorted', th.dataset.sort === sortKey);
+            th.dataset.dir = th.dataset.sort === sortKey ? (sortDir === 1 ? 'asc' : 'desc') : '';
+        });
+
+        if (!tenders.length) {
+            tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">No tenders match this view.</td></tr>';
+            return;
+        }
+
+        const sorted = [...tenders].sort((a, b) => {
+            let va, vb;
+            if (sortKey === 'review_status') {
+                va = _STATUS_ORDER[a.review_status || 'pending'];
+                vb = _STATUS_ORDER[b.review_status || 'pending'];
+            } else if (sortKey === 'id') {
+                va = a.id; vb = b.id;
+            } else {
+                va = String(a[sortKey] ?? '').toLowerCase();
+                vb = String(b[sortKey] ?? '').toLowerCase();
+            }
+            if (va < vb) return -sortDir;
+            if (va > vb) return  sortDir;
+            return 0;
+        });
+
+        tbodyEl.innerHTML = sorted.map(_rowTr).join('');
+        tbodyEl.querySelectorAll('tr[data-id]').forEach(row => {
+            row.addEventListener('click', () =>
+                openModal(row.dataset.source, parseInt(row.dataset.id, 10)));
+        });
+    }
+
+    function _rowTr(t) {
+        const st    = t.review_status || 'pending';
+        const byWho = t.reviewed_by_name ? ` · ${_esc(t.reviewed_by_name)}` : '';
+        const statusPill = st === 'pending'
+            ? '<span class="rv-pill rv-pill-pending" title="Awaiting review">⏳ Pending</span>'
+            : st === 'approved'
+                ? `<span class="rv-pill rv-pill-approved" title="Approved${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">✓ Approved${byWho}</span>`
+                : `<span class="rv-pill rv-pill-rejected" title="Rejected${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">✕ Rejected${byWho}</span>`;
+        const idTag = `${t.source === 'taiq' ? 'T' : 'M'}-${t.id}`;
         return `
-            <div class="rv-row rv-row-${st}" data-source="${t.source}" data-id="${t.id}">
-                <span class="rv-row-icon">${icon}</span>
-                <div class="rv-row-main">
-                    <span class="rv-row-title">${_esc(t.title || 'Unknown Opportunity')}</span>
-                    <div class="rv-row-meta">
-                        <span class="site-badge site-${_esc(t.site)}">${_esc((t.site || '').toUpperCase())}</span>
-                        <span class="kw-tag">${_esc(t.keyword || '')}</span>
-                        <span class="rv-row-src">${t.source === 'taiq' ? '🤖 TAiQ' : '🔍 Manual'}</span>
-                        <span class="rv-row-date">${_prettyDT(t.found_at)}</span>
-                    </div>
-                </div>
-                ${who}
-            </div>`;
+            <tr class="rv-tr rv-tr-${st}" data-source="${t.source}" data-id="${t.id}">
+                <td class="rv-td-id">${idTag}</td>
+                <td class="rv-td-title" title="${_esc(t.title || '')}">${_esc(t.title || 'Unknown Opportunity')}</td>
+                <td><span class="site-badge site-${_esc(t.site)}">${_esc((t.site || '').toUpperCase())}</span></td>
+                <td><span class="kw-tag">${_esc(t.keyword || '')}</span></td>
+                <td class="rv-td-src">${t.source === 'taiq' ? '🤖 TAiQ' : '🔍 Manual'}</td>
+                <td class="rv-td-date">${_prettyDT(t.found_at)}</td>
+                <td>${statusPill}</td>
+            </tr>`;
     }
 
     // ── Modal ──────────────────────────────────────────────────────────────
@@ -231,17 +282,20 @@ document.addEventListener('DOMContentLoaded', () => {
             mReviewInfo.classList.add('hidden');
         }
 
-        // Overview fields
+        // Overview fields — long values span the full width so words never clip
         const fields = t.fields || {};
         mFields.innerHTML = Object.keys(fields).length
-            ? Object.entries(fields).map(([k, v]) =>
-                `<div class="rv-field"><strong>${_esc(k)}</strong><span>${_esc(String(v))}</span></div>`).join('')
+            ? Object.entries(fields).map(([k, v]) => {
+                const val  = String(v);
+                const wide = val.length > 90 ? ' rv-field-wide' : '';
+                return `<div class="rv-field${wide}"><strong>${_esc(k)}</strong><span>${_esc(val)}</span></div>`;
+            }).join('')
             : '<span class="empty-msg">No summary fields available.</span>';
 
         // Links
         let links = '';
         if (t.url)        links += `<a href="${_esc(t.url)}" target="_blank" class="card-link">View source ↗</a>`;
-        if (t.tender_dir) links += `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}" class="card-dl-btn" download>⬇ Download All</a>`;
+        if (t.tender_dir) links += `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}" class="rv-dl-all" download>⬇ Download All Files</a>`;
         mLinks.innerHTML = links;
 
         _loadFiles(t.tender_dir);
@@ -281,10 +335,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             mFiles.innerHTML = files.map(f => {
-                const url = `/download/file?path=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token)}`;
-                return `<div class="card-file-item">
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    <a href="${url}" download title="${_esc(f.name)}">${_esc(f.name)}</a>
+                const url  = `/download/file?path=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token)}`;
+                const ext  = (f.name.split('.').pop() || '').toLowerCase();
+                const kind = ['xlsx', 'xls', 'csv'].includes(ext) ? 'xls'
+                           : ext === 'pdf'                        ? 'pdf'
+                           : ['doc', 'docx'].includes(ext)        ? 'doc'
+                           : ext === 'zip'                        ? 'zip' : 'file';
+                const tag  = kind === 'file'
+                    ? (ext ? ext.slice(0, 4).toUpperCase() : 'FILE')
+                    : kind.toUpperCase();
+                return `<div class="rv-file-card">
+                    <span class="rv-file-ico ico-${kind}">${tag}</span>
+                    <span class="rv-file-name" title="${_esc(f.name)}">${_esc(f.name)}</span>
+                    <a href="${url}" class="rv-file-view" download>View</a>
                 </div>`;
             }).join('');
         } catch {

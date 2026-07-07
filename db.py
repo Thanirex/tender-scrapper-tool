@@ -939,9 +939,10 @@ class TenderDB:
             ).fetchall()
 
     def get_review_summary(self, month: str) -> dict:
-        """Counts for one IST month ('YYYY-MM'): scraped/approved/rejected/pending."""
+        """Counts + review metrics for one IST month ('YYYY-MM')."""
         like   = f"{month}%"
         counts = {"approved": 0, "rejected": 0, "pending": 0}
+        review_spans: list = []   # (found_at, reviewed_at) of decided tenders
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
                 rows = conn.execute(
@@ -953,7 +954,32 @@ class TenderDB:
                 ).fetchall()
                 for r in rows:
                     counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
+                review_spans += conn.execute(
+                    f"""SELECT found_at, reviewed_at FROM {table}
+                        WHERE found_at LIKE ?
+                          AND COALESCE(review_status, 'pending') != 'pending'
+                          AND reviewed_at IS NOT NULL""",
+                    (like,),
+                ).fetchall()
+
         counts["scraped"] = counts["approved"] + counts["rejected"] + counts["pending"]
+
+        # Approval rate = share of decided tenders that were approved
+        decided = counts["approved"] + counts["rejected"]
+        counts["decided"]       = decided
+        counts["approval_rate"] = round(100 * counts["approved"] / decided) if decided else None
+
+        # Average time from scrape to decision, in hours
+        hours: list = []
+        for r in review_spans:
+            try:
+                delta = (datetime.fromisoformat(r["reviewed_at"])
+                         - datetime.fromisoformat(r["found_at"])).total_seconds() / 3600
+                if delta >= 0:
+                    hours.append(delta)
+            except (ValueError, TypeError):
+                continue
+        counts["avg_review_hours"] = round(sum(hours) / len(hours), 1) if hours else None
         return counts
 
     def get_review_months(self, limit: int = 6) -> "list[dict]":
