@@ -24,6 +24,17 @@ def now_ist() -> datetime:
     return datetime.now(tz=IST)
 
 
+def now_ist_naive() -> datetime:
+    """IST wall-clock time with tzinfo stripped.
+
+    Use this for every displayed/stored timestamp string so the app always
+    shows Indian time, no matter what timezone the host server is set to.
+    Stripping tzinfo keeps existing string formats unchanged (no +05:30
+    suffix), so old and new DB rows still sort together lexically.
+    """
+    return datetime.now(tz=IST).replace(tzinfo=None)
+
+
 def is_within_24h_ist(date_str: str) -> bool:
     """
     Return True if date_str falls within the last 24 hours from now (IST).

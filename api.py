@@ -20,6 +20,7 @@ from agents.summarizer_agent import SummarizerAgent
 from paths import APP_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, DB_PATH, init as _init_paths
 from db import TenderDB
 from auth import decode_token, hash_password
+from date_utils import now_ist_naive
 
 load_dotenv(APP_DIR / ".env")
 
@@ -308,7 +309,7 @@ def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = NasscomScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -380,7 +381,7 @@ def _run_trademarkafrica_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = TradeMarkAfricaScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -456,7 +457,7 @@ def _run_worldbank_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = WorldBankScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -532,7 +533,7 @@ def _run_fhi360_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = FHI360ScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -608,7 +609,7 @@ def _run_gatsbyafrica_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = GatsbyAfricaScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -684,7 +685,7 @@ def _run_jsi_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = JSIScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -760,7 +761,7 @@ def _run_chai_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = CHAIScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -836,7 +837,7 @@ def _run_drc_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = DRCScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -912,7 +913,7 @@ def _run_afrosai_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = AfrosaiScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -987,7 +988,7 @@ def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = ACBFScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -1048,7 +1049,7 @@ def _run_au_scrape(site_key: str, keywords: list, log_cb,
 
     agent      = AUScraperAgent()
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / site_key / timestamp
     tender_dirs: list[Path] = []
 
@@ -1134,7 +1135,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
         log_cb("❌ UNGM email and password are required.")
         return None
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir = DOWNLOADS_DIR / "ungm" / timestamp
     summarizer = SummarizerAgent()
     excel_paths = []
@@ -1299,7 +1300,7 @@ async def websocket_endpoint(
         def run_scrape():
             zip_path = None
             try:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                ts = now_ist_naive().strftime("%Y%m%d_%H%M%S")
 
                 # Determine scraper type from config
                 try:

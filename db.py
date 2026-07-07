@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
+from date_utils import now_ist_naive
+
 
 def _normalize(title: str) -> str:
     t = title.lower()
@@ -417,7 +419,7 @@ class TenderDB:
     def mark_downloaded(self, title: str, url: str, site: str,
                         keyword: str, published_date: str = ""):
         norm = _normalize(title)
-        now  = datetime.now().isoformat(timespec="seconds")
+        now  = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
                 _insert_ignore(
@@ -432,7 +434,7 @@ class TenderDB:
 
     def create_user(self, username: str, email: str, password_hash: str,
                     role: str, created_by: int = None) -> int:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO users
@@ -488,7 +490,7 @@ class TenderDB:
     # ── Search sessions ────────────────────────────────────────────────────────
 
     def create_session(self, user_id: int, site: str) -> int:
-        now = datetime.now()
+        now = now_ist_naive()
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO search_sessions
@@ -533,7 +535,7 @@ class TenderDB:
     def record_found_tender(self, session_id: int, keyword: str, title: str,
                              url: str, site: str, published_date: str = "",
                              summary: dict = None, tender_dir: str = "") -> int:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO found_tenders
@@ -668,7 +670,7 @@ class TenderDB:
 
     def log_activity(self, user_id: int, username: str, action: str,
                      details: dict = None, ip_address: str = None):
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO activity_logs
@@ -701,12 +703,8 @@ class TenderDB:
     # ── TAiQ cron ──────────────────────────────────────────────────────────────
 
     def create_cron_run(self, total_keywords: int = 0) -> int:
-        now = datetime.now().isoformat(timespec="seconds")
-        try:
-            import pytz
-            run_date = datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
-        except Exception:
-            run_date = datetime.now().strftime("%Y-%m-%d")
+        now = now_ist_naive().isoformat(timespec="seconds")
+        run_date = now_ist_naive().strftime("%Y-%m-%d")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO cron_runs
@@ -731,7 +729,7 @@ class TenderDB:
     def record_cron_tender(self, run_id: int, keyword: str, title: str,
                             url: str, site: str, published_date: str = "",
                             summary: dict = None, tender_dir: str = "") -> int:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO cron_tenders
@@ -760,7 +758,7 @@ class TenderDB:
     def mark_cron_seen(self, title: str, url: str, site: str,
                        keyword: str, published_date: str = ""):
         norm = _normalize(title)
-        now  = datetime.now().isoformat(timespec="seconds")
+        now  = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             conn.execute(
                 _insert_ignore(
@@ -825,7 +823,7 @@ class TenderDB:
             ).fetchone()
 
     def mark_stale_runs_failed(self) -> int:
-        now = datetime.now().isoformat(timespec="seconds")
+        now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """UPDATE cron_runs

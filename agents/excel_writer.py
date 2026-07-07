@@ -1,6 +1,8 @@
 from datetime import datetime
 from pathlib import Path
 from openpyxl import Workbook
+
+from date_utils import now_ist_naive
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
 _THIN = Side(style="thin")
@@ -153,7 +155,7 @@ def write_level1_report(records: list, output_path: str) -> None:
     wb = Workbook()
     wb.remove(wb.active)   # discard the default blank sheet
 
-    sourced_on = datetime.now().strftime("%d-%b-%Y")
+    sourced_on = now_ist_naive().strftime("%d-%b-%Y")
     used_names: list[str] = []
 
     for record in records:

@@ -6,6 +6,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+from date_utils import now_ist_naive
+
 logger = logging.getLogger("taiq.cron")
 
 _scheduler      = None
@@ -50,12 +52,14 @@ def get_log_buffer() -> list:
 def _write_log(msg: str):
     """Append a timestamped line to the in-memory buffer AND the run log file."""
     global _log_buffer
-    ts   = datetime.now().strftime("%H:%M:%S")
+    ts   = now_ist_naive().strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     with _log_lock:
         _log_buffer.append(line)
-        if len(_log_buffer) > 5000:
-            _log_buffer = _log_buffer[-5000:]
+        # Generous cap — a full daily run must fit so the dashboard shows
+        # the complete log, not just the tail. (Memory safety net only.)
+        if len(_log_buffer) > 100_000:
+            _log_buffer = _log_buffer[-100_000:]
     if _log_file_path:
         try:
             with open(_log_file_path, "a", encoding="utf-8") as f:
@@ -159,7 +163,7 @@ def run_daily_job():
 
     proxy      = CronDBProxy(_db, run_id)
     summarizer = SummarizerAgent()
-    timestamp  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / "cron" / f"cron_{timestamp}"
 
     total_tenders = 0
@@ -1161,7 +1165,7 @@ def run_daily_job():
                     _db.update_cron_run(run_id, keywords_done=keywords_done)
 
         # ── Finish ─────────────────────────────────────────────────────────────
-        finished_at = datetime.now().isoformat(timespec="seconds")
+        finished_at = now_ist_naive().isoformat(timespec="seconds")
 
         if _stop_event.is_set():
             _write_log(
@@ -1192,7 +1196,7 @@ def run_daily_job():
             )
 
     except _StopRequested:
-        finished_at = datetime.now().isoformat(timespec="seconds")
+        finished_at = now_ist_naive().isoformat(timespec="seconds")
         _write_log(
             f"⏹ Run stopped mid-scrape — {keywords_done}/{total_kw} keywords, "
             f"{total_tenders} tenders saved"
@@ -1218,7 +1222,7 @@ def run_daily_job():
         logger.error(traceback.format_exc())
         _db.update_cron_run(
             run_id, status="failed",
-            finished_at=datetime.now().isoformat(timespec="seconds"),
+            finished_at=now_ist_naive().isoformat(timespec="seconds"),
             current_keyword="", error_msg=err_msg[:500],
         )
 

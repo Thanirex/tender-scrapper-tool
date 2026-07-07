@@ -109,7 +109,7 @@ async def taiq_logs(
         return {"run_id": target_id, "lines": ["Log file not found on disk."], "live": False}
 
     lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return {"run_id": target_id, "lines": lines[-3000:], "live": False}
+    return {"run_id": target_id, "lines": lines, "live": False}
 
 
 @router.post("/stop")

@@ -8,20 +8,20 @@ It started as a scraper. It became an autonomous agent with a command centre.
 
 ## What it does
 
-| Capability | Description |
-|---|---|
-| **Autonomous daily agent** | TAiQ runs at 07:00 IST every day without human intervention — scraping every configured site across every keyword, analysing each tender with Gemini, and populating the database before your team's morning standup |
-| **Multi-site scraping** | UNGM (UN Global Marketplace, auth-based), DevNet, NGOBox — new sites added via a JSON config, no code changes |
-| **LLM extraction** | 26-field structured Level 1 analysis per tender: reference, deadline, scope, eligibility, budget, selection criteria, consortium rules, clarification contacts, and more |
-| **Confidence-graded output** | Every field is tagged `[VERIFIED]` (scraped from HTML ground truth), `[EXTRACTED]` (found by LLM in documents), `[NOT_FOUND]`, or `[MISMATCH: HIGH PRIORITY ERROR]` when a verified field contradicts attached documents |
-| **Document intelligence** | Downloads all PDF, DOCX, and XLSX attachments per tender; extracts text from all of them before the LLM sees the bundle |
-| **Manual scraping** | Any authorised user can trigger a targeted scrape — choose site, keyword category or custom keywords, and watch a live log stream |
-| **Excel reports** | Level 1 Excel report generated per tender run, downloadable from the dashboard |
-| **Dashboard with calendar** | Select any historical date; see run activity, per-site tender counts, proportional bar charts, and the full tender grid with keyword and site filters |
-| **Role-based access control** | Three roles — `user` (read-only), `admin` (scrape + dashboard), `superadmin` (user management, audit log, stop TAiQ mid-run) |
-| **Audit trail** | Every login, scrape, and admin action is logged with timestamp and user |
-| **Zero-credential storage** | UNGM login credentials for manual scrapes are never persisted — used in-session only |
-| **Docker-native** | Single `docker compose up` command; all data persisted to a named volume |
+| Capability                          | Description                                                                                                                                                                                                                     |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Autonomous daily agent**    | TAiQ runs at 07:00 IST every day without human intervention — scraping every configured site across every keyword, analysing each tender with Gemini, and populating the database before your team's morning standup           |
+| **Multi-site scraping**       | UNGM (UN Global Marketplace, auth-based), DevNet, NGOBox — new sites added via a JSON config, no code changes                                                                                                                  |
+| **LLM extraction**            | 26-field structured Level 1 analysis per tender: reference, deadline, scope, eligibility, budget, selection criteria, consortium rules, clarification contacts, and more                                                        |
+| **Confidence-graded output**  | Every field is tagged`[VERIFIED]` (scraped from HTML ground truth), `[EXTRACTED]` (found by LLM in documents), `[NOT_FOUND]`, or `[MISMATCH: HIGH PRIORITY ERROR]` when a verified field contradicts attached documents |
+| **Document intelligence**     | Downloads all PDF, DOCX, and XLSX attachments per tender; extracts text from all of them before the LLM sees the bundle                                                                                                         |
+| **Manual scraping**           | Any authorised user can trigger a targeted scrape — choose site, keyword category or custom keywords, and watch a live log stream                                                                                              |
+| **Excel reports**             | Level 1 Excel report generated per tender run, downloadable from the dashboard                                                                                                                                                  |
+| **Dashboard with calendar**   | Select any historical date; see run activity, per-site tender counts, proportional bar charts, and the full tender grid with keyword and site filters                                                                           |
+| **Role-based access control** | Three roles —`user` (read-only), `admin` (scrape + dashboard), `superadmin` (user management, audit log, stop TAiQ mid-run)                                                                                              |
+| **Audit trail**               | Every login, scrape, and admin action is logged with timestamp and user                                                                                                                                                         |
+| **Zero-credential storage**   | UNGM login credentials for manual scrapes are never persisted — used in-session only                                                                                                                                           |
+| **Docker-native**             | Single`docker compose up` command; all data persisted to a named volume                                                                                                                                                       |
 
 ---
 
@@ -58,7 +58,7 @@ FastAPI  (api.py)
     ├── Admin API       user CRUD · role changes
     │
     └── Superadmin API  audit log · platform-wide controls
-    
+  
 MySQL / SQLite  (tender_tracker.db or DATABASE_URL)
     tables: users · sessions · found_tenders · cron_runs · cron_tenders · audit_log
 ```
@@ -67,11 +67,11 @@ MySQL / SQLite  (tender_tracker.db or DATABASE_URL)
 
 ## Roles
 
-| Role | Can do |
-|---|---|
-| `user` | View dashboard, filter tenders |
-| `admin` | All of `user` + trigger manual scrapes, view live logs, download reports |
-| `superadmin` | All of `admin` + manage users, view audit log, stop TAiQ mid-run |
+| Role           | Can do                                                                    |
+| -------------- | ------------------------------------------------------------------------- |
+| `user`       | View dashboard, filter tenders                                            |
+| `admin`      | All of`user` + trigger manual scrapes, view live logs, download reports |
+| `superadmin` | All of`admin` + manage users, view audit log, stop TAiQ mid-run         |
 
 The first `superadmin` is seeded from environment variables on startup. All subsequent users are created by a superadmin from the Users page.
 
@@ -97,17 +97,17 @@ Log in with the superadmin credentials you set in `.env`. TAiQ will fire its fir
 
 ## Environment variables
 
-| Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | Yes | Google AI Studio key — used for all LLM summarisation |
-| `UNGM_EMAIL` | Yes (for UNGM) | UNGM vendor portal login email |
-| `UNGM_PASSWORD` | Yes (for UNGM) | UNGM vendor portal password |
-| `JWT_SECRET_KEY` | **Yes in prod** | Secret for signing JWTs — use a long random string |
-| `SUPERADMIN_USERNAME` | No | Username for the seeded superadmin (default: `superadmin`) |
-| `SUPERADMIN_EMAIL` | No | Email for the seeded superadmin |
-| `SUPERADMIN_PASSWORD` | No | Password for the seeded superadmin (default: `changeme123` — change this) |
-| `TENDER_DATA_DIR` | No | Override data directory (default: `~/Documents/Tender Scrapping Documents`) — set to `/data` in Docker |
-| `DATABASE_URL` | No | Database connection string — leave unset for SQLite, or set to `mysql+pymysql://user:pass@host:3306/db` for MySQL (see Database section below) |
+| Variable                | Required              | Description                                                                                                                                      |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GEMINI_API_KEY`      | Yes                   | Google AI Studio key — used for all LLM summarisation                                                                                           |
+| `UNGM_EMAIL`          | Yes (for UNGM)        | UNGM vendor portal login email                                                                                                                   |
+| `UNGM_PASSWORD`       | Yes (for UNGM)        | UNGM vendor portal password                                                                                                                      |
+| `JWT_SECRET_KEY`      | **Yes in prod** | Secret for signing JWTs — use a long random string                                                                                              |
+| `SUPERADMIN_USERNAME` | No                    | Username for the seeded superadmin (default:`superadmin`)                                                                                      |
+| `SUPERADMIN_EMAIL`    | No                    | Email for the seeded superadmin                                                                                                                  |
+| `SUPERADMIN_PASSWORD` | No                    | Password for the seeded superadmin (default:`changeme123` — change this)                                                                      |
+| `TENDER_DATA_DIR`     | No                    | Override data directory (default:`~/Documents/Tender Scrapping Documents`) — set to `/data` in Docker                                       |
+| `DATABASE_URL`        | No                    | Database connection string — leave unset for SQLite, or set to`mysql+pymysql://user:pass@host:3306/db` for MySQL (see Database section below) |
 
 ---
 
@@ -285,16 +285,16 @@ docker compose build --no-cache && docker compose up -d
 
 ### Schema reference
 
-| Table | Contents |
-|---|---|
-| `users` | Accounts, roles, bcrypt password hashes |
-| `search_sessions` | One row per manual scrape run |
-| `found_tenders` | Tenders discovered by manual scrapes |
-| `cron_runs` | One row per TAiQ autonomous agent run |
-| `cron_tenders` | Tenders discovered by TAiQ |
-| `cron_dedup` | Cross-run deduplication index for TAiQ |
-| `downloaded_tenders` | Global dedup index (manual scrapes) |
-| `activity_logs` | Audit trail — every login, scrape, and admin action |
+| Table                  | Contents                                             |
+| ---------------------- | ---------------------------------------------------- |
+| `users`              | Accounts, roles, bcrypt password hashes              |
+| `search_sessions`    | One row per manual scrape run                        |
+| `found_tenders`      | Tenders discovered by manual scrapes                 |
+| `cron_runs`          | One row per TAiQ autonomous agent run                |
+| `cron_tenders`       | Tenders discovered by TAiQ                           |
+| `cron_dedup`         | Cross-run deduplication index for TAiQ               |
+| `downloaded_tenders` | Global dedup index (manual scrapes)                  |
+| `activity_logs`      | Audit trail — every login, scrape, and admin action |
 
 MySQL DDL is in `schema_mysql.sql`. PostgreSQL / SQLite DDL is in `schema.sql`.
 
@@ -349,14 +349,14 @@ entrypoint.sh
 
 ## Tech stack
 
-| Layer | Technology |
-|---|---|
-| Backend | Python 3.12 · FastAPI · Uvicorn |
-| Browser automation | Playwright (Chromium headless) |
-| LLM | Google Gemini — `gemma-4-31b-it` |
-| Scheduling | APScheduler (CronTrigger) |
-| Database | MySQL 8.0+ (prod) · SQLite (dev/single-server) · PostgreSQL |
-| Auth | JWT (`python-jose`) · bcrypt |
-| Document parsing | pdfplumber · python-docx · openpyxl |
-| Container | Docker · Docker Compose |
-| Frontend | Vanilla JS · CSS custom properties (no build step) |
+| Layer              | Technology                                                    |
+| ------------------ | ------------------------------------------------------------- |
+| Backend            | Python 3.12 · FastAPI · Uvicorn                             |
+| Browser automation | Playwright (Chromium headless)                                |
+| LLM                | Google Gemini —`gemma-4-31b-it`                            |
+| Scheduling         | APScheduler (CronTrigger)                                     |
+| Database           | MySQL 8.0+ (prod) · SQLite (dev/single-server) · PostgreSQL |
+| Auth               | JWT (`python-jose`) · bcrypt                               |
+| Document parsing   | pdfplumber · python-docx · openpyxl                         |
+| Container          | Docker · Docker Compose                                      |
+| Frontend           | Vanilla JS · CSS custom properties (no build step)           |
