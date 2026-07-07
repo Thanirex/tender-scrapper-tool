@@ -48,14 +48,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const actionLabels = {
-            login:          'Login',
-            scrape_start:   'Scrape Start',
-            create_user:    'Create User',
-            update_user:    'Update User',
-            deactivate_user:'Deactivate User',
-        };
-
         tableWrap.innerHTML = `
             <table class="data-table">
                 <thead>
@@ -63,29 +55,19 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Time</th>
                         <th>User</th>
                         <th>Action</th>
-                        <th>Details</th>
+                        <th>What happened</th>
                         <th>IP</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${items.map(log => {
-                        let details = '';
-                        try {
-                            const d = JSON.parse(log.details_json || '{}');
-                            details = Object.entries(d)
-                                .map(([k,v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
-                                .join(' · ');
-                        } catch {}
-                        const actionCls = log.action === 'login' ? 'action-login'
-                                        : log.action.startsWith('scrape') ? 'action-scrape'
-                                        : log.action.includes('deactivate') ? 'action-danger'
-                                        : 'action-default';
+                        const { label, cls, text } = _describe(log);
                         return `
                             <tr>
                                 <td class="time-cell">${_fmt(log.timestamp)}</td>
-                                <td><strong>${log.username || '—'}</strong></td>
-                                <td><span class="action-badge ${actionCls}">${actionLabels[log.action] || log.action}</span></td>
-                                <td class="details-cell">${details || '—'}</td>
+                                <td><strong>${_esc(log.username) || '—'}</strong></td>
+                                <td><span class="action-badge ${cls}">${label}</span></td>
+                                <td class="audit-desc">${text}</td>
                                 <td class="time-cell">${log.ip_address || '—'}</td>
                             </tr>
                         `;
@@ -118,6 +100,90 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             });
         }
+    }
+
+    // Turn a raw log row into a badge + plain-English sentence
+    function _describe(log) {
+        let d = {};
+        try { d = JSON.parse(log.details_json || '{}'); } catch {}
+        const t = s => `<em>“${_esc(s)}”</em>`;
+
+        switch (log.action) {
+            case 'login':
+                return { label: 'Login', cls: 'action-login',
+                         text: 'Logged into TAiQ' };
+
+            case 'scrape_start': {
+                const kws = Array.isArray(d.keywords) ? d.keywords.join(', ') : d.keywords;
+                return { label: 'Scrape', cls: 'action-scrape',
+                         text: `Started a manual scrape on ${_esc((d.site || '?').toUpperCase())}`
+                               + (kws ? ` for keywords ${t(kws)}` : '') };
+            }
+
+            case 'taiq_run':
+                return { label: 'TAiQ', cls: 'action-scrape',
+                         text: 'Manually triggered the TAiQ daily scrape' };
+            case 'taiq_stop':
+                return { label: 'TAiQ', cls: 'action-danger',
+                         text: `Stopped the running TAiQ scrape${d.run_id ? ` (run #${d.run_id})` : ''}` };
+
+            case 'tender_approved': {
+                const edited = d.previous_status && d.previous_status !== 'pending';
+                return { label: 'Approved', cls: 'action-approve',
+                         text: `${edited ? 'Changed the decision to APPROVED for' : 'Approved'} tender ${t(d.title || '?')}` };
+            }
+            case 'tender_rejected': {
+                const edited = d.previous_status && d.previous_status !== 'pending';
+                return { label: 'Rejected', cls: 'action-reject',
+                         text: `${edited ? 'Changed the decision to REJECTED for' : 'Rejected'} tender ${t(d.title || '?')}` };
+            }
+            case 'tender_commented':
+                return { label: 'Comment', cls: 'action-comment',
+                         text: `Commented on tender ${t(d.title || '?')}` };
+
+            case 'download_file':
+                return { label: 'Download', cls: 'action-download',
+                         text: `Downloaded file ${t(d.name || '?')}` };
+            case 'download_tender_zip':
+                return { label: 'Download', cls: 'action-download',
+                         text: `Downloaded all documents of tender ${t(d.name || '?')} as a ZIP` };
+            case 'download_report':
+                return { label: 'Download', cls: 'action-download',
+                         text: `Downloaded report ${t(d.name || '?')}` };
+
+            case 'create_user':
+                return { label: 'User', cls: 'action-default',
+                         text: `Created a new ${_esc(d.role || 'user')} account ${t(d.new_user || '?')}` };
+            case 'update_user': {
+                const ch = d.changes || {};
+                const parts = [];
+                if (ch.username !== undefined)  parts.push(`renamed to ${t(ch.username)}`);
+                if (ch.email !== undefined)     parts.push(`email changed to ${t(ch.email)}`);
+                if (ch.is_active !== undefined) parts.push(ch.is_active ? 'account re-activated' : 'account deactivated');
+                return { label: 'User', cls: 'action-default',
+                         text: `Updated user #${d.target_id || '?'}${parts.length ? ' — ' + parts.join(', ') : ''}` };
+            }
+            case 'deactivate_user':
+                return { label: 'User', cls: 'action-danger',
+                         text: `Deactivated user account #${d.target_id || '?'}` };
+
+            default: {
+                // Unknown action — prettify it instead of showing raw jargon
+                const nice    = log.action.replace(/_/g, ' ');
+                const details = Object.entries(d)
+                    .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+                    .join(' · ');
+                return { label: nice.charAt(0).toUpperCase() + nice.slice(1),
+                         cls: 'action-default',
+                         text: _esc(details) || '—' };
+            }
+        }
+    }
+
+    function _esc(s) {
+        return String(s ?? '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
     function _fmt(iso) {

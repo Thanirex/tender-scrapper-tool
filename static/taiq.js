@@ -394,25 +394,28 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<div class="card-field"><strong>${k}</strong><span>${val}</span></div>`;
         }).join('');
 
-        let actionsHtml = '';
-        if (t.url || t.tender_dir) {
-            actionsHtml = '<div class="card-actions">';
-            if (t.url) {
-                actionsHtml += `<a href="${t.url}" target="_blank" class="card-link">View ↗</a>`;
-            }
-            if (t.tender_dir) {
-                const dlUrl = `/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}`;
-                actionsHtml += `<a href="${dlUrl}" class="card-dl-btn" download>⬇ Download All</a>`;
-                actionsHtml += `<button class="card-files-btn" data-dir="${t.tender_dir}">📎 Files</button>`;
-            }
-            actionsHtml += '</div>';
+        const rvStatus = t.review_status || 'pending';
+        const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
+        const rvChip   = `<span class="card-review-chip chip-${rvStatus}">${rvIcon} ${rvStatus}</span>`;
+
+        let actionsHtml = '<div class="card-actions">';
+        if (t.url) {
+            actionsHtml += `<a href="${t.url}" target="_blank" class="card-link">View ↗</a>`;
         }
+        if (t.tender_dir) {
+            const dlUrl = `/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}`;
+            actionsHtml += `<a href="${dlUrl}" class="card-dl-btn" download>⬇ Download All</a>`;
+            actionsHtml += `<button class="card-files-btn" data-dir="${t.tender_dir}">📎 Files</button>`;
+        }
+        actionsHtml += `<a href="/status?open=taiq:${t.id}" class="card-review-link">📝 Review</a>`;
+        actionsHtml += '</div>';
 
         return `
             <div class="result-card">
                 <div class="card-meta">
                     <span class="site-badge site-${t.site}">${(t.site || '').toUpperCase()}</span>
                     <span class="kw-tag">${t.keyword || ''}</span>
+                    ${rvChip}
                 </div>
                 <h4>${t.title || 'Unknown Opportunity'}</h4>
                 <div class="card-fields">${fieldRows}</div>

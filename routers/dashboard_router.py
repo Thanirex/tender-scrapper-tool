@@ -1,10 +1,12 @@
-from datetime import date as date_cls
-
 from fastapi import APIRouter, Depends, Request, Query
 
 from auth import require_roles
+from date_utils import now_ist_naive
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+# Read-only overview — visible to every logged-in role
+_auth = Depends(require_roles("user", "admin", "superadmin"))
 
 
 def _db(request: Request):
@@ -12,14 +14,14 @@ def _db(request: Request):
 
 
 def _today() -> str:
-    return date_cls.today().isoformat()
+    return now_ist_naive().strftime("%Y-%m-%d")
 
 
 @router.get("/stats")
 async def get_stats(
     request: Request,
     date: str = Query(default=None),
-    current_user: dict = Depends(require_roles("admin", "superadmin")),
+    current_user: dict = _auth,
 ):
     return _db(request).get_stats_for_date(date or _today())
 
@@ -30,7 +32,7 @@ async def get_tenders(
     date: str = Query(default=None),
     site: str = Query(default=None),
     keyword: str = Query(default=None),
-    current_user: dict = Depends(require_roles("admin", "superadmin")),
+    current_user: dict = _auth,
 ):
     return _db(request).get_tenders_for_date(date or _today(), site, keyword)
 
@@ -38,6 +40,6 @@ async def get_tenders(
 @router.get("/dates")
 async def get_dates(
     request: Request,
-    current_user: dict = Depends(require_roles("admin", "superadmin")),
+    current_user: dict = _auth,
 ):
     return _db(request).get_dates_with_data()

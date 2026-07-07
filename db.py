@@ -400,6 +400,31 @@ class TenderDB:
             self._idx(conn, False, "idx_cron_dedup_title", "cron_dedup", "title_norm")
             self._url_idx(conn, "idx_cron_dedup_url", "cron_dedup")
 
+            # ── Tender review / feedback ───────────────────────────────────
+            # review_status: 'pending' | 'approved' | 'rejected'
+            # MySQL cannot put a DEFAULT on TEXT columns, so use VARCHAR there.
+            _status_col = ("VARCHAR(20)" if _IS_MYSQL else "TEXT") + \
+                          " NOT NULL DEFAULT 'pending'"
+            for _t in ("cron_tenders", "found_tenders"):
+                self._add_col(conn, _t, "review_status",    _status_col)
+                self._add_col(conn, _t, "reviewed_by",      "INTEGER")
+                self._add_col(conn, _t, "reviewed_by_name", "TEXT")
+                self._add_col(conn, _t, "reviewed_at",      "TEXT")
+
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS tender_comments (
+                    id         {_PK},
+                    source     {"VARCHAR(20)" if _IS_MYSQL else "TEXT"} NOT NULL,
+                    tender_id  INTEGER NOT NULL,
+                    user_id    INTEGER,
+                    username   TEXT,
+                    action     {"VARCHAR(20)" if _IS_MYSQL else "TEXT"} NOT NULL DEFAULT 'comment',
+                    comment    TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            self._idx(conn, False, "idx_tender_comments_t", "tender_comments", "tender_id")
+
     # ── Dedup ──────────────────────────────────────────────────────────────────
 
     def is_duplicate(self, title: str, url: str = "") -> bool:
@@ -838,6 +863,145 @@ class TenderDB:
             conn.execute(
                 "UPDATE cron_runs SET stop_requested = 1 WHERE id = ?", (run_id,)
             )
+
+    # ── Tender review / feedback ───────────────────────────────────────────────
+    #
+    # Review state lives on the tender row itself (cron_tenders / found_tenders).
+    # Every decision or comment also appends a row to tender_comments, so the
+    # full "why" history survives edits and is visible to everyone.
+
+    _REVIEW_SOURCES = {"taiq": "cron_tenders", "manual": "found_tenders"}
+
+    def _review_table(self, source: str) -> str:
+        table = self._REVIEW_SOURCES.get(source)
+        if not table:
+            raise ValueError(f"Unknown review source: {source!r}")
+        return table
+
+    @staticmethod
+    def _attach_fields(row: dict) -> dict:
+        try:
+            row["fields"] = json.loads(row.get("summary_json") or "{}")
+        except Exception:
+            row["fields"] = {}
+        row["review_status"] = row.get("review_status") or "pending"
+        return row
+
+    def get_review_tender(self, source: str, tender_id: int) -> "dict | None":
+        table = self._review_table(source)
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT * FROM {table} WHERE id = ?", (tender_id,)
+            ).fetchone()
+        if row:
+            self._attach_fields(row)
+            row["source"] = source
+        return row
+
+    def set_tender_review(self, source: str, tender_id: int, status: str,
+                          user_id: int, username: str, comment: str):
+        table = self._review_table(source)
+        now   = now_ist_naive().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                f"""UPDATE {table}
+                    SET review_status = ?, reviewed_by = ?,
+                        reviewed_by_name = ?, reviewed_at = ?
+                    WHERE id = ?""",
+                (status, user_id, username, now, tender_id),
+            )
+            conn.execute(
+                """INSERT INTO tender_comments
+                   (source, tender_id, user_id, username, action, comment, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (source, tender_id, user_id, username, status, comment, now),
+            )
+
+    def add_tender_comment(self, source: str, tender_id: int,
+                           user_id: int, username: str, comment: str):
+        self._review_table(source)   # validates source
+        now = now_ist_naive().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT INTO tender_comments
+                   (source, tender_id, user_id, username, action, comment, created_at)
+                   VALUES (?, ?, ?, ?, 'comment', ?, ?)""",
+                (source, tender_id, user_id, username, comment, now),
+            )
+
+    def get_tender_comments(self, source: str, tender_id: int) -> "list[dict]":
+        with self._connect() as conn:
+            return conn.execute(
+                """SELECT * FROM tender_comments
+                   WHERE source = ? AND tender_id = ?
+                   ORDER BY created_at ASC, id ASC""",
+                (source, tender_id),
+            ).fetchall()
+
+    def get_review_summary(self, month: str) -> dict:
+        """Counts for one IST month ('YYYY-MM'): scraped/approved/rejected/pending."""
+        like   = f"{month}%"
+        counts = {"approved": 0, "rejected": 0, "pending": 0}
+        with self._connect() as conn:
+            for table in self._REVIEW_SOURCES.values():
+                rows = conn.execute(
+                    f"""SELECT COALESCE(review_status, 'pending') AS st,
+                               COUNT(*) AS n
+                        FROM {table} WHERE found_at LIKE ?
+                        GROUP BY COALESCE(review_status, 'pending')""",
+                    (like,),
+                ).fetchall()
+                for r in rows:
+                    counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
+        counts["scraped"] = counts["approved"] + counts["rejected"] + counts["pending"]
+        return counts
+
+    def get_review_months(self, limit: int = 6) -> "list[dict]":
+        """Per-month counts for the trend chart, oldest → newest."""
+        buckets: dict = {}
+        with self._connect() as conn:
+            for table in self._REVIEW_SOURCES.values():
+                rows = conn.execute(
+                    f"""SELECT SUBSTR(found_at, 1, 7) AS m,
+                               COALESCE(review_status, 'pending') AS st,
+                               COUNT(*) AS n
+                        FROM {table}
+                        GROUP BY SUBSTR(found_at, 1, 7),
+                                 COALESCE(review_status, 'pending')"""
+                ).fetchall()
+                for r in rows:
+                    b = buckets.setdefault(
+                        r["m"], {"month": r["m"], "approved": 0,
+                                 "rejected": 0, "pending": 0}
+                    )
+                    b[r["st"]] = b.get(r["st"], 0) + r["n"]
+        months = sorted(buckets.values(), key=lambda b: b["month"], reverse=True)[:limit]
+        for b in months:
+            b["scraped"] = b["approved"] + b["rejected"] + b["pending"]
+        return list(reversed(months))
+
+    def get_review_tenders(self, month: str, status: str = None,
+                           q: str = None) -> "list[dict]":
+        like   = f"{month}%"
+        result = []
+        with self._connect() as conn:
+            for source, table in self._REVIEW_SOURCES.items():
+                sql    = f"SELECT * FROM {table} WHERE found_at LIKE ?"
+                params: list = [like]
+                if status:
+                    sql += " AND COALESCE(review_status, 'pending') = ?"
+                    params.append(status)
+                if q:
+                    sql += " AND (title LIKE ? OR keyword LIKE ? OR site LIKE ?)"
+                    params += [f"%{q}%"] * 3
+                sql += " ORDER BY found_at DESC"
+                for r in conn.execute(sql, params).fetchall():
+                    self._attach_fields(r)
+                    r.pop("summary_json", None)
+                    r["source"] = source
+                    result.append(r)
+        result.sort(key=lambda x: x.get("found_at", ""), reverse=True)
+        return result
 
 
 # ── CronDBProxy ────────────────────────────────────────────────────────────────

@@ -115,7 +115,7 @@ async def taiq_logs(
 @router.post("/stop")
 async def taiq_stop(
     request: Request,
-    _user: dict = _superadmin,
+    user: dict = _superadmin,
 ):
     import cron_runner
     db  = request.app.state.db
@@ -126,6 +126,11 @@ async def taiq_stop(
         )
     db.request_cron_stop(run["id"])
     cron_runner.request_stop()
+    db.log_activity(
+        int(user["sub"]), user["username"], "taiq_stop",
+        details={"run_id": run["id"]},
+        ip_address=request.client.host if request.client else None,
+    )
     return {"ok": True, "run_id": run["id"],
             "message": "Stop signal sent — job will halt within a few seconds"}
 
@@ -133,11 +138,12 @@ async def taiq_stop(
 @router.post("/run")
 async def taiq_trigger(
     request: Request,
-    _user: dict = _superadmin,
+    user: dict = _superadmin,
 ):
     import threading
     import cron_runner
-    run = request.app.state.db.get_latest_cron_run()
+    db  = request.app.state.db
+    run = db.get_latest_cron_run()
     if run and run["status"] == "running":
         return JSONResponse(
             {"error": "A run is already in progress"}, status_code=400
@@ -145,4 +151,8 @@ async def taiq_trigger(
     threading.Thread(
         target=cron_runner.run_daily_job, daemon=True, name="taiq-manual"
     ).start()
+    db.log_activity(
+        int(user["sub"]), user["username"], "taiq_run",
+        ip_address=request.client.host if request.client else None,
+    )
     return {"ok": True, "message": "Manual run triggered"}

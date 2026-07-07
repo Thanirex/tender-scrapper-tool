@@ -55,16 +55,20 @@ CREATE TABLE IF NOT EXISTS session_keywords (
 
 -- ── Tenders found by manual scrapes ───────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS found_tenders (
-    id             SERIAL PRIMARY KEY,
-    session_id     INTEGER NOT NULL REFERENCES search_sessions(id),
-    keyword        TEXT    NOT NULL,
-    title          TEXT    NOT NULL,
-    url            TEXT,
-    site           TEXT    NOT NULL,
-    published_date TEXT,
-    summary_json   TEXT,
-    tender_dir     TEXT,
-    found_at       TEXT    NOT NULL
+    id               SERIAL PRIMARY KEY,
+    session_id       INTEGER NOT NULL REFERENCES search_sessions(id),
+    keyword          TEXT    NOT NULL,
+    title            TEXT    NOT NULL,
+    url              TEXT,
+    site             TEXT    NOT NULL,
+    published_date   TEXT,
+    summary_json     TEXT,
+    tender_dir       TEXT,
+    found_at         TEXT    NOT NULL,
+    review_status    TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+    reviewed_by      INTEGER,
+    reviewed_by_name TEXT,
+    reviewed_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_found_session ON found_tenders (session_id);
 
@@ -110,16 +114,20 @@ CREATE INDEX IF NOT EXISTS idx_cron_runs_date ON cron_runs (run_date);
 
 -- ── Tenders found by TAiQ ─────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS cron_tenders (
-    id              SERIAL PRIMARY KEY,
-    run_id          INTEGER NOT NULL REFERENCES cron_runs(id),
-    keyword         TEXT    NOT NULL,
-    title           TEXT    NOT NULL,
-    url             TEXT,
-    site            TEXT    NOT NULL,
-    published_date  TEXT,
-    summary_json    TEXT,
-    tender_dir      TEXT,
-    found_at        TEXT    NOT NULL
+    id               SERIAL PRIMARY KEY,
+    run_id           INTEGER NOT NULL REFERENCES cron_runs(id),
+    keyword          TEXT    NOT NULL,
+    title            TEXT    NOT NULL,
+    url              TEXT,
+    site             TEXT    NOT NULL,
+    published_date   TEXT,
+    summary_json     TEXT,
+    tender_dir       TEXT,
+    found_at         TEXT    NOT NULL,
+    review_status    TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+    reviewed_by      INTEGER,
+    reviewed_by_name TEXT,
+    reviewed_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cron_tenders_run ON cron_tenders (run_id);
 
@@ -137,3 +145,16 @@ CREATE INDEX IF NOT EXISTS idx_cron_dedup_title ON cron_dedup (title_norm);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_dedup_url
     ON cron_dedup (url)
     WHERE url IS NOT NULL AND url <> '';
+
+-- ── Tender review comments (approve/reject reasons + discussion) ──────────────
+CREATE TABLE IF NOT EXISTS tender_comments (
+    id         SERIAL PRIMARY KEY,
+    source     TEXT    NOT NULL,   -- 'taiq' (cron_tenders) | 'manual' (found_tenders)
+    tender_id  INTEGER NOT NULL,
+    user_id    INTEGER,
+    username   TEXT,
+    action     TEXT    NOT NULL DEFAULT 'comment',  -- approved|rejected|comment
+    comment    TEXT    NOT NULL,
+    created_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tender_comments_t ON tender_comments (tender_id);

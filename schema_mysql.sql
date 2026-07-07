@@ -70,7 +70,11 @@ CREATE TABLE IF NOT EXISTS found_tenders (
     published_date TEXT,
     summary_json   TEXT,
     tender_dir     TEXT,
-    found_at       TEXT    NOT NULL
+    found_at       TEXT    NOT NULL,
+    review_status    VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+    reviewed_by      INTEGER,
+    reviewed_by_name TEXT,
+    reviewed_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_found_session ON found_tenders (session_id);
 
@@ -126,7 +130,11 @@ CREATE TABLE IF NOT EXISTS cron_tenders (
     published_date  TEXT,
     summary_json    TEXT,
     tender_dir      TEXT,
-    found_at        TEXT    NOT NULL
+    found_at        TEXT    NOT NULL,
+    review_status    VARCHAR(20) NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
+    reviewed_by      INTEGER,
+    reviewed_by_name TEXT,
+    reviewed_at      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cron_tenders_run ON cron_tenders (run_id);
 
@@ -142,3 +150,16 @@ CREATE TABLE IF NOT EXISTS cron_dedup (
 );
 CREATE INDEX IF NOT EXISTS idx_cron_dedup_title ON cron_dedup (title_norm);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_dedup_url ON cron_dedup (url);
+
+-- ── Tender review comments (approve/reject reasons + discussion) ──────────────
+CREATE TABLE IF NOT EXISTS tender_comments (
+    id         INT AUTO_INCREMENT PRIMARY KEY,
+    source     VARCHAR(20) NOT NULL,   -- 'taiq' (cron_tenders) | 'manual' (found_tenders)
+    tender_id  INTEGER     NOT NULL,
+    user_id    INTEGER,
+    username   TEXT,
+    action     VARCHAR(20) NOT NULL DEFAULT 'comment',  -- approved|rejected|comment
+    comment    TEXT        NOT NULL,
+    created_at TEXT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tender_comments_t ON tender_comments (tender_id);

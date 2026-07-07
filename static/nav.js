@@ -23,9 +23,10 @@ function _renderNav(user) {
     const currentPath = window.location.pathname;
 
     const links = [
-        { href: '/dashboard',  label: 'Dashboard',  minRole: 'admin' },
+        { href: '/dashboard',  label: 'Dashboard',  minRole: 'user' },
         { href: '/',           label: 'Scraper',    minRole: 'user' },
         { href: '/taiq-work',  label: 'TAiQ Work',  minRole: 'user' },
+        { href: '/status',     label: 'Status',     minRole: 'user' },
         { href: '/users',      label: 'Users',      minRole: 'admin' },
         { href: '/audit',      label: 'Audit Logs', minRole: 'superadmin' },
     ];

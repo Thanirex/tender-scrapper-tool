@@ -45,12 +45,14 @@ from routers.admin_router import router as admin_router
 from routers.dashboard_router import router as dashboard_router
 from routers.superadmin_router import router as superadmin_router
 from routers.taiq_router import router as taiq_router
+from routers.review_router import router as review_router
 
 app.include_router(auth_router)
 app.include_router(admin_router)
 app.include_router(dashboard_router)
 app.include_router(superadmin_router)
 app.include_router(taiq_router)
+app.include_router(review_router)
 
 # ── Seed superadmin on first startup ──────────────────────────────────────
 
@@ -103,6 +105,11 @@ async def read_taiq():
     return FileResponse(str(APP_DIR / "static" / "taiq.html"))
 
 
+@app.get("/status")
+async def read_status():
+    return FileResponse(str(APP_DIR / "static" / "status.html"))
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
@@ -120,12 +127,21 @@ async def get_config():
     return {"sites": list(sites.keys()), "keywords": keywords}
 
 
+def _log_download(payload: dict, action: str, name: str):
+    """Record who downloaded what for the audit log. Never blocks the download."""
+    try:
+        _db.log_activity(int(payload.get("sub", 0)), payload.get("username", "?"),
+                         action, details={"name": name})
+    except Exception:
+        pass
+
+
 @app.get("/download")
 async def download_file(name: str, token: Optional[str] = Query(default=None)):
     if not token:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
-        decode_token(token)
+        payload = decode_token(token)
     except Exception:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
@@ -140,6 +156,7 @@ async def download_file(name: str, token: Optional[str] = Query(default=None)):
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".zip":  "application/zip",
     }
+    _log_download(payload, "download_report", name)
     return FileResponse(
         str(file_path),
         media_type=mime_map.get(ext, "application/octet-stream"),
@@ -181,7 +198,7 @@ async def download_single_file(
     if not token:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
-        decode_token(token)
+        payload = decode_token(token)
     except Exception:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
@@ -200,6 +217,7 @@ async def download_single_file(
         ".zip":  "application/zip",
         ".txt":  "text/plain",
     }
+    _log_download(payload, "download_file", file_path.name)
     return FileResponse(
         str(file_path),
         media_type=mime_map.get(ext, "application/octet-stream"),
@@ -215,7 +233,7 @@ async def download_tender_folder(
     if not token:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
     try:
-        decode_token(token)
+        payload = decode_token(token)
     except Exception:
         return JSONResponse({"error": "Invalid token"}, status_code=401)
 
@@ -234,6 +252,7 @@ async def download_tender_folder(
             if fpath.is_file():
                 zf.write(fpath, fpath.relative_to(tender_dir))
 
+    _log_download(payload, "download_tender_zip", tender_dir.name)
     return FileResponse(str(zip_path), media_type="application/zip", filename=zip_name)
 
 

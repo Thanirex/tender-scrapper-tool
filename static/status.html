@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Status</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=19">
+</head>
+<body>
+    <div class="app-background"></div>
+
+    <nav class="top-nav">
+        <div class="nav-left">
+            <div class="logo">TAiQ</div>
+            <div class="nav-links" id="nav-links"></div>
+        </div>
+        <div class="nav-right">
+            <img src="/assets/cnk_logo.png" alt="CNK Logo" class="cnk-logo" onerror="this.style.display='none'">
+            <div id="nav-user-area"></div>
+        </div>
+    </nav>
+
+    <div class="main-layout">
+        <header class="page-header">
+            <h1>Status</h1>
+            <p>Monthly tender review — approve or reject scraped tenders with feedback</p>
+        </header>
+
+        <!-- Month switcher -->
+        <div class="rv-month-bar">
+            <button class="taiq-cal-nav" id="rv-month-prev">&#8249;</button>
+            <span class="rv-month-label" id="rv-month-label">—</span>
+            <button class="taiq-cal-nav" id="rv-month-next">&#8250;</button>
+        </div>
+
+        <!-- Stat tiles -->
+        <div class="rv-tiles">
+            <div class="rv-tile rv-tile-all active" data-status="">
+                <span class="rv-tile-num" id="rv-num-scraped">—</span>
+                <span class="rv-tile-lbl">Scraped</span>
+            </div>
+            <div class="rv-tile rv-tile-approved" data-status="approved">
+                <span class="rv-tile-num" id="rv-num-approved">—</span>
+                <span class="rv-tile-lbl">Approved</span>
+            </div>
+            <div class="rv-tile rv-tile-rejected" data-status="rejected">
+                <span class="rv-tile-num" id="rv-num-rejected">—</span>
+                <span class="rv-tile-lbl">Rejected</span>
+            </div>
+            <div class="rv-tile rv-tile-pending" data-status="pending">
+                <span class="rv-tile-num" id="rv-num-pending">—</span>
+                <span class="rv-tile-lbl">Pending</span>
+            </div>
+        </div>
+
+        <!-- 6-month trend -->
+        <div class="rv-trend-card">
+            <div class="rv-trend-title">Last 6 months</div>
+            <div class="rv-trend" id="rv-trend"></div>
+            <div class="rv-trend-legend">
+                <span class="rv-leg rv-leg-approved"></span> Approved
+                <span class="rv-leg rv-leg-rejected"></span> Rejected
+                <span class="rv-leg rv-leg-pending"></span> Pending
+            </div>
+        </div>
+
+        <!-- Filter + search -->
+        <div class="rv-filter-row">
+            <span class="rv-filter-label" id="rv-filter-label">All tenders</span>
+            <input type="text" id="rv-search" class="filter-input" placeholder="Search title, keyword or site…">
+            <span class="results-count-lbl" id="rv-count-lbl">—</span>
+        </div>
+
+        <!-- Tender list -->
+        <div class="rv-list" id="rv-list">
+            <p class="empty-msg">Loading…</p>
+        </div>
+    </div>
+
+    <!-- Detail modal -->
+    <div class="rv-modal-overlay hidden" id="rv-modal-overlay">
+        <div class="rv-modal">
+            <div class="rv-modal-head">
+                <div class="rv-modal-head-left">
+                    <span class="rv-status-badge" id="rvm-badge">—</span>
+                    <span class="site-badge" id="rvm-site">—</span>
+                    <span class="kw-tag" id="rvm-kw">—</span>
+                </div>
+                <button class="rv-modal-close" id="rvm-close">✕</button>
+            </div>
+            <h3 class="rv-modal-title" id="rvm-title">—</h3>
+            <div class="rv-modal-reviewinfo hidden" id="rvm-reviewinfo"></div>
+
+            <div class="rv-modal-body">
+                <!-- Overview -->
+                <div class="rv-modal-section">
+                    <div class="rv-section-title">📄 Overview</div>
+                    <div class="rv-fields" id="rvm-fields"></div>
+                    <div class="rv-modal-links" id="rvm-links"></div>
+                </div>
+
+                <!-- Files -->
+                <div class="rv-modal-section">
+                    <div class="rv-section-title">📎 Files</div>
+                    <div class="rv-files" id="rvm-files"><span class="empty-msg">Loading files…</span></div>
+                </div>
+
+                <!-- Comments timeline -->
+                <div class="rv-modal-section">
+                    <div class="rv-section-title">💬 Activity &amp; Comments</div>
+                    <div class="rv-comments" id="rvm-comments"></div>
+                </div>
+
+                <!-- Decision panel -->
+                <div class="rv-modal-section rv-decision" id="rvm-decision">
+                    <div class="rv-section-title" id="rvm-decision-title">Your review</div>
+                    <textarea id="rvm-comment-input" class="rv-comment-input" rows="3"
+                              placeholder="Write a comment — required when approving or rejecting…"></textarea>
+                    <div class="rv-decision-btns">
+                        <button class="rv-btn rv-btn-approve" id="rvm-approve">✅ Approve</button>
+                        <button class="rv-btn rv-btn-reject"  id="rvm-reject">❌ Reject</button>
+                        <button class="rv-btn rv-btn-comment" id="rvm-comment">💬 Comment only</button>
+                    </div>
+                    <div class="rv-decision-err hidden" id="rvm-err"></div>
+                </div>
+                <div class="rv-modal-section rv-locked hidden" id="rvm-locked">
+                    <span id="rvm-locked-text">This tender has been reviewed.</span>
+                    <button class="rv-btn rv-btn-edit hidden" id="rvm-edit">✏️ Edit decision</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/auth.js"></script>
+    <script src="/static/nav.js"></script>
+    <script>initNav();</script>
+    <script src="/static/status.js?v=2"></script>
+</body>
+</html>
