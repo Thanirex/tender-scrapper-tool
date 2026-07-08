@@ -42,6 +42,10 @@ else:
 _IDX_TEXT  = "VARCHAR(500)" if _IS_MYSQL else "TEXT"   # for indexed text columns
 _URL_COL   = "VARCHAR(767)" if _IS_MYSQL else "TEXT"   # for uniquely-indexed url columns
 _USER_TEXT = "VARCHAR(191)" if _IS_MYSQL else "TEXT"   # for UNIQUE username/email columns
+# MySQL forbids DEFAULT values on TEXT/BLOB columns (error 1101); any column that
+# carries a DEFAULT must be VARCHAR there.
+_ENUM_TEXT = "VARCHAR(20)"  if _IS_MYSQL else "TEXT"   # short status/action columns with DEFAULTs
+_KW_TEXT   = "VARCHAR(500)" if _IS_MYSQL else "TEXT"   # current_keyword (has DEFAULT '')
 
 
 def _get_sqlite_path(fallback: str) -> str:
@@ -281,7 +285,7 @@ class TenderDB:
                     user_id      INTEGER NOT NULL REFERENCES users(id),
                     site         TEXT    NOT NULL,
                     run_date     TEXT    NOT NULL,
-                    status       TEXT    NOT NULL DEFAULT 'running',
+                    status       {_ENUM_TEXT} NOT NULL DEFAULT 'running',
                     zip_filename TEXT,
                     created_at   TEXT    NOT NULL
                 )
@@ -352,18 +356,18 @@ class TenderDB:
                     run_date        TEXT    NOT NULL,
                     started_at      TEXT    NOT NULL,
                     finished_at     TEXT,
-                    status          TEXT    NOT NULL DEFAULT 'running',
+                    status          {_ENUM_TEXT} NOT NULL DEFAULT 'running',
                     total_keywords  INTEGER NOT NULL DEFAULT 0,
                     keywords_done   INTEGER NOT NULL DEFAULT 0,
                     total_tenders   INTEGER NOT NULL DEFAULT 0,
                     error_msg       TEXT,
                     stop_requested  INTEGER NOT NULL DEFAULT 0,
-                    current_keyword TEXT    NOT NULL DEFAULT '',
+                    current_keyword {_KW_TEXT} NOT NULL DEFAULT '',
                     log_file        TEXT
                 )
             """)
             self._add_col(conn, "cron_runs", "stop_requested",  "INTEGER NOT NULL DEFAULT 0")
-            self._add_col(conn, "cron_runs", "current_keyword", "TEXT    NOT NULL DEFAULT ''")
+            self._add_col(conn, "cron_runs", "current_keyword", f"{_KW_TEXT} NOT NULL DEFAULT ''")
             self._add_col(conn, "cron_runs", "log_file",        "TEXT")
             self._idx(conn, False, "idx_cron_runs_date", "cron_runs", "run_date", prefix=10)
 
@@ -403,8 +407,7 @@ class TenderDB:
             # ── Tender review / feedback ───────────────────────────────────
             # review_status: 'pending' | 'approved' | 'rejected'
             # MySQL cannot put a DEFAULT on TEXT columns, so use VARCHAR there.
-            _status_col = ("VARCHAR(20)" if _IS_MYSQL else "TEXT") + \
-                          " NOT NULL DEFAULT 'pending'"
+            _status_col = f"{_ENUM_TEXT} NOT NULL DEFAULT 'pending'"
             for _t in ("cron_tenders", "found_tenders"):
                 self._add_col(conn, _t, "review_status",    _status_col)
                 self._add_col(conn, _t, "reviewed_by",      "INTEGER")
@@ -414,11 +417,11 @@ class TenderDB:
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS tender_comments (
                     id         {_PK},
-                    source     {"VARCHAR(20)" if _IS_MYSQL else "TEXT"} NOT NULL,
+                    source     {_ENUM_TEXT} NOT NULL,
                     tender_id  INTEGER NOT NULL,
                     user_id    INTEGER,
                     username   TEXT,
-                    action     {"VARCHAR(20)" if _IS_MYSQL else "TEXT"} NOT NULL DEFAULT 'comment',
+                    action     {_ENUM_TEXT} NOT NULL DEFAULT 'comment',
                     comment    TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
