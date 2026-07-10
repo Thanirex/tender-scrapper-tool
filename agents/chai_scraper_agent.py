@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist, extract_date_from_text
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 # JS to collect RFP entries from the CHAI resource-center listing page.
 # The page is pre-filtered to RFPs sorted by date desc via URL query params.
@@ -122,6 +122,7 @@ class CHAIScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "chai"
 
+                n_title_miss = n_neg = n_stale = n_dup = n_opened = 0
                 for row in rows:
                     title     = row["title"]
                     url       = row["url"]
@@ -129,6 +130,13 @@ class CHAIScraperAgent:
 
                     # ── Keyword filter ──────────────────────────────────────
                     if not keyword_matches(keyword, title):
+                        n_title_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
                     # ── 24-hour publication check (listing datetime attr) ───
@@ -137,22 +145,33 @@ class CHAIScraperAgent:
                     # cards), we defer the check to the detail page body text.
                     if published:
                         if not is_within_24h_ist(published):
-                            log(f"   📅 Skipping '{title[:60]}' — published {published} (>24h ago)")
+                            n_stale += 1
+                            log(f"   📅 Skipping '{title[:60]}' — matched, but published {published} (>24h ago)")
                             continue
                         log(f"   ✅ Date OK from listing: {published}")
                     # No published date from listing → date check happens inside _extract_detail
 
                     # ── Dedup check ─────────────────────────────────────────
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     rec = self._extract_detail(ctx, url, keyword, title, published, base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on CHAI: {len(rows)} RFP(s) listed → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_stale} older than 24h, "
+                    f"{n_dup} already collected, {n_opened} opened for full check, "
+                    f"{len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ CHAI scrape error: {e}")
@@ -184,6 +203,13 @@ class CHAIScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "chai", keyword, "")
+                return None
 
             # ── Date check ────────────────────────────────────────────────
             # Use listing date if we got one; otherwise mine the page body.

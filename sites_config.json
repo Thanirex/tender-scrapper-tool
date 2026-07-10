@@ -122,5 +122,11 @@
         "scraper_type": "chai",
         "display_name": "Clinton Health Access Initiative (RFPs)",
         "skip_date_filter": false
+    },
+    "reliefweb": {
+        "url": "https://reliefweb.int/jobs",
+        "scraper_type": "reliefweb",
+        "display_name": "ReliefWeb Jobs",
+        "skip_date_filter": false
     }
 }

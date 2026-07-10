@@ -7,11 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from date_utils import is_within_24h_ist, extract_date_from_text
-from keyword_utils import keyword_matches
-
-# Lift this number to raise the per-keyword tender cap
-RESULTS_CAP = 10
-
+from keyword_utils import keyword_matches, find_negative_keyword
 
 class UNGMScraperAgent:
     BASE_URL = "https://www.ungm.org"
@@ -183,22 +179,31 @@ class UNGMScraperAgent:
         except Exception:
             raw_hrefs = []
 
-        hrefs = raw_hrefs[:RESULTS_CAP]
+        hrefs = raw_hrefs
 
         if not hrefs:
             log(f"   ↳ No results found")
             return []
 
-        log(f"   ↳ Opening {len(hrefs)} tenders (cap={RESULTS_CAP})")
+        log(f"   ↳ Opening {len(hrefs)} tenders")
 
         results = []
+        stats = {"error": 0, "title_miss": 0, "neg": 0, "stale": 0, "no_date": 0, "dup": 0}
         for idx, href in enumerate(hrefs):
             log(f"   📄 [{idx+1}/{len(hrefs)}] {href}")
-            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log, db)
+            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log, db, stats=stats)
             if rec:
                 results.append(rec)
                 if on_tender_ready:
                     on_tender_ready(rec)   # summarise + save Excel immediately
+
+        log(
+            f"   📊 '{keyword}' summary on UNGM: {len(hrefs)} notice(s) opened → "
+            f"{stats['title_miss']} without the keyword in the title, "
+            f"{stats['neg']} blocked by negative keywords, {stats['stale']} older than 24h, "
+            f"{stats['no_date']} missing a publish date, {stats['dup']} already collected, "
+            f"{stats['error']} failed to load, {len(results)} saved"
+        )
 
         return results
 
@@ -207,17 +212,22 @@ class UNGMScraperAgent:
         "forbidden", "page not found", "error 500", "bad request",
     }
 
-    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None) -> dict | None:
+    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None, stats=None) -> dict | None:
         """
         Open the notice in a FRESH TAB so the search-results page stays intact.
         The original `page` is never navigated away — only used for keyword search.
         """
+        def _bump(reason: str):
+            if stats is not None:
+                stats[reason] = stats.get(reason, 0) + 1
+
         notice_page = ctx.new_page()
         try:
             log(f"      🔄 Opening notice page...")
             try:
                 notice_page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as nav_e:
+                _bump("error")
                 log(f"      ❌ Navigation error: {nav_e}")
                 return None
 
@@ -225,11 +235,13 @@ class UNGMScraperAgent:
             try:
                 notice_page.locator("h1").wait_for(state="visible", timeout=10000)
             except Exception:
+                _bump("error")
                 log(f"      ⚠️ Page did not render (h1 not visible after 10 s) — skipping.")
                 return None
 
             # Session-expired: UNGM redirects silently to /Login
             if "/Login" in notice_page.url or "/login" in notice_page.url:
+                _bump("error")
                 log(f"      ⚠️ Session expired — redirected to login. Skipping.")
                 return None
 
@@ -241,6 +253,7 @@ class UNGMScraperAgent:
 
             # Bail out on error pages — skip rather than waste an LLM call on garbage
             if any(sig in title.lower() for sig in self._ERROR_SIGNALS):
+                _bump("error")
                 log(f"      ⚠️ Error page ('{title}') — skipping.")
                 return None
 
@@ -248,7 +261,14 @@ class UNGMScraperAgent:
 
             # ── Keyword relevance check ──────────────────────────────────────
             if not keyword_matches(keyword, title):
+                _bump("title_miss")
                 log(f"      🚫 Skipping '{title[:60]}' — keyword '{keyword}' not in title")
+                return None
+
+            neg = find_negative_keyword(title)
+            if neg:
+                _bump("neg")
+                log(f"      🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                 return None
 
             # Verified structured fields (ground truth — no LLM needed)
@@ -277,6 +297,14 @@ class UNGMScraperAgent:
             except Exception:
                 body_text = ""
 
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                _bump("neg")
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "ungm", keyword, "")
+                return None
+
             # ── Date filter: last 24 hours IST ──────────────────────────────
             # Try verified "Published on" field first; fall back to body text.
             pub_date = next(
@@ -288,15 +316,18 @@ class UNGMScraperAgent:
 
             if pub_date:
                 if not is_within_24h_ist(pub_date):
-                    log(f"      📅 Skipping '{title[:60]}' — published {pub_date} (>24h ago)")
+                    _bump("stale")
+                    log(f"      📅 Skipping '{title[:60]}' — matched, but published {pub_date} (>24h ago)")
                     return None
             else:
+                _bump("no_date")
                 log(f"      ⚠️ No publication date found for '{title[:60]}' — skipping")
                 return None
 
             # ── Deduplication check ──────────────────────────────────────────
             if db and db.is_duplicate(title, url):
-                log(f"      ⏩ Duplicate skipped: {title[:60]}")
+                _bump("dup")
+                log(f"      ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                 return None
 
             # Folder for this tender (short paths — Windows MAX_PATH = 260)

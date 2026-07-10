@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 # Page is built with Elementor. Each tender entry sits in its own inner
 # container (e-con / elementor-column) which holds sibling widgets:
@@ -140,18 +140,27 @@ class AfrosaiScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "afrosai"
 
+                n_miss = n_neg = n_dup = 0
                 for tender in tenders:
                     title = tender["title"]
                     text  = tender["text"]
                     links = tender["links"]
 
                     if not keyword_matches(keyword, title, text):
+                        n_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title, text)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
                         continue
 
                     url = links[0] if links else self.PAGE_URL
 
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
                     log(f"   📄 {title[:70]}")
@@ -194,6 +203,12 @@ class AfrosaiScraperAgent:
                     results.append(rec)
                     if on_result_ready:
                         on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on AFROSAI-E: {len(tenders)} entry(ies) listed → "
+                    f"{n_miss} without the keyword, {n_neg} blocked by negative keywords, "
+                    f"{n_dup} already collected, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ AFROSAI-E scrape error: {e}")

@@ -10,7 +10,7 @@ from playwright.sync_api import sync_playwright
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist, extract_date_from_text
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class ScraperAgent:
@@ -110,6 +110,9 @@ class ScraperAgent:
                 total = self._do_search(page, site, keyword)
                 log(f"   ↳ Found {total} results.")
 
+                # Tallies for the closing summary — every result is accounted for
+                n_title_miss = n_neg = n_stale = n_no_date = n_dup = n_err = 0
+
                 # URL-template sites (e.g. AfDB) expose stable result hrefs —
                 # collect them once and open each directly. Re-running the
                 # search for every row triggers Cloudflare's "Just a moment"
@@ -202,13 +205,29 @@ class ScraperAgent:
 
                         # ── Keyword relevance check ──────────────────────────────
                         if not keyword_matches(keyword, title):
+                            n_title_miss += 1
                             log(f"   🚫 Skipping '{title[:55]}' — keyword '{keyword}' not in title")
+                            continue
+
+                        neg = find_negative_keyword(title)
+                        if neg:
+                            n_neg += 1
+                            log(f"   🚫 Skipping '{title[:55]}' — negative keyword '{neg}' in title")
                             continue
 
                         try:
                             content = page.locator(site['tender_description_selector']).first.text_content().strip()
                         except Exception:
                             content = "Could not extract content."
+
+                        # ── Negative keyword check on the description ────────────
+                        neg = find_negative_keyword(title, content)
+                        if neg:
+                            n_neg += 1
+                            log(f"   🚫 Rejected '{title[:55]}' — negative keyword '{neg}' in description")
+                            if db:
+                                db.mark_downloaded(title, current_url, site_key, keyword, "")
+                            continue
 
                         # ── Date filter ──────────────────────────────────────────
                         # Sites that only expose a deadline (not a publish date) set
@@ -221,15 +240,18 @@ class ScraperAgent:
                             pub_date = self._extract_pub_date(page, site)
                             if pub_date:
                                 if not is_within_24h_ist(pub_date):
-                                    log(f"   📅 Skipping '{title[:55]}' — published {pub_date} (>24h ago)")
+                                    n_stale += 1
+                                    log(f"   📅 Skipping '{title[:55]}' — matched, but published {pub_date} (>24h ago)")
                                     continue
                             else:
+                                n_no_date += 1
                                 log(f"   ⚠️ No publication date found for '{title[:55]}' — skipping")
                                 continue
 
                         # ── Deduplication check ──────────────────────────────────
                         if db and db.is_duplicate(title, current_url):
-                            log(f"   ⏩ Duplicate skipped: {title[:60]}")
+                            n_dup += 1
+                            log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                             continue
 
                         # Per-tender folder: downloads/{site}/{keyword}/{title}/
@@ -259,8 +281,17 @@ class ScraperAgent:
                             on_result_ready(rec)   # summarise + save Excel immediately
 
                     except Exception as row_err:
+                        n_err += 1
                         log(f"   ⚠️ Error on row {i}: {row_err}")
                         continue
+
+                log(
+                    f"   📊 '{keyword}' summary on {site_key}: {total} result(s) → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_stale} older than 24h, "
+                    f"{n_no_date} missing a publish date, {n_dup} already collected, "
+                    f"{n_err} errored, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ Scraping error on {site_key}: {e}")

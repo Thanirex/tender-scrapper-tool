@@ -486,14 +486,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         ws.onerror = () => { alert('Connection lost.'); resetStartBtn(); };
         ws.onclose = () => {
+            // Only a close that happens MID-RUN is a problem — after a
+            // "complete" message the badge is no longer "Running" and the
+            // server closing the socket is normal.
             if (statusBadge.textContent === 'Running') {
-                alert('Connection closed unexpectedly.');
+                alert('The connection to the server was lost before the run finished. Please try again.');
                 resetStartBtn();
             }
         };
 
         function finishRun(zipFilename) {
             hideNotif();
+
+            // Mark the run as finished FIRST so the normal socket close
+            // that follows is not mistaken for an error.
+            statusBadge.className = 'status-badge success';
+            statusBadge.style.background = '';
+            statusBadge.style.color = '';
+            statusBadge.textContent = 'Complete';
 
             stateRunning.classList.remove('active');
             stateDone.classList.add('active');

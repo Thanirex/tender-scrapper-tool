@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 # Suppress InsecureRequestWarning for verify=False fallback
 import urllib3
@@ -57,6 +57,7 @@ class WorldBankScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "worldbank"
                 skipped = 0
+                n_neg = n_dup = n_opened = 0
 
                 for item in items:
                     url      = item["url"]
@@ -82,19 +83,31 @@ class WorldBankScraperAgent:
                         skipped += 1
                         continue
 
-                    if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                    neg = find_negative_keyword(title, searchable)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    if db and db.is_duplicate(title, url):
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                        continue
+
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     rec = self._extract_detail(ctx, url, keyword, title, base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
 
-                if skipped:
-                    log(f"   ℹ️ {skipped} listing(s) skipped — keyword '{keyword}' not found in row text")
+                log(
+                    f"   📊 '{keyword}' summary on World Bank: {len(items)} listing(s) scanned → "
+                    f"{skipped} without the keyword in the row text, "
+                    f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+                    f"{n_opened} opened for full check, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ World Bank scrape error: {e}")
@@ -107,11 +120,10 @@ class WorldBankScraperAgent:
 
     def _collect_all_items(self, page, log) -> list:
         """Walk all pages of the listing and return every item."""
-        items     = []
-        page_num  = 1
-        max_pages = 50
+        items    = []
+        page_num = 1
 
-        while page_num <= max_pages:
+        while True:
             page_items = self._collect_page_items(page, log)
             if not page_items:
                 break
@@ -304,6 +316,13 @@ class WorldBankScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "worldbank", keyword, "")
+                return None
 
             # Collect document download URLs (template placeholders and .html routes filtered out)
             doc_hrefs = self._collect_doc_links(detail_page)

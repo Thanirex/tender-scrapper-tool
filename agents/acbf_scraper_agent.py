@@ -5,7 +5,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class ACBFScraperAgent:
@@ -32,6 +32,7 @@ class ACBFScraperAgent:
                 items = self._collect_items(page, log)
                 log(f"   ↳ {len(items)} procurement item(s) found")
 
+                n_title_miss = n_neg = n_dup = n_opened = 0
                 for item in items:
                     title = item["title"]
                     url   = item["url"]
@@ -40,19 +41,35 @@ class ACBFScraperAgent:
                         continue
 
                     if not keyword_matches(keyword, title):
+                        n_title_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "acbf"
                     rec = self._extract_detail(ctx, url, keyword, title, item.get("deadline", ""), base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on ACBF: {len(items)} item(s) listed → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+                    f"{n_opened} opened for full check, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ ACBF scrape error: {e}")
@@ -133,6 +150,13 @@ class ACBFScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "acbf", keyword, deadline)
+                return None
 
             log(f"      📋 {title[:70]}")
 

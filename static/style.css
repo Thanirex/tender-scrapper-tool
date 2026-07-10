@@ -3334,3 +3334,106 @@ details.advanced-settings summary {
     .rv-fields  { grid-template-columns: 1fr; }
 }
 
+/* =============================================
+   BOOTSTRAP 5 COMPATIBILITY LAYER
+   Bootstrap loads BEFORE this stylesheet. The rules
+   below re-assert the TAiQ theme where Bootstrap's
+   Reboot or components would otherwise override it.
+   ============================================= */
+
+/* Reboot adds margins to text elements with element-level
+   specificity, which beats the universal reset at the top
+   of this file — re-zero them here. */
+h1, h2, h3, h4, h5, h6,
+p, ul, ol, dl, figure, blockquote, pre {
+    margin: 0;
+    padding: 0;
+}
+
+/* Bootstrap's .modal component is hidden + fixed by default;
+   our custom modal (inside .modal-overlay) must stay a plain
+   block centered by its overlay. */
+.modal-overlay .modal {
+    display: block;
+    position: relative;
+    top: auto;
+    left: auto;
+    z-index: auto;
+    height: auto;
+    overflow: hidden;
+}
+.modal-overlay .modal-footer > * { margin: 0; }
+
+/* Reboot underlines and recolors bare links; classed links in the
+   app style themselves, so only reset the underline default. */
+a { text-decoration: none; }
+
+/* =============================================
+   RESPONSIVE POLISH (tablet & mobile)
+   ============================================= */
+@media (max-width: 992px) {
+    .top-nav { padding: 0.85rem 1.25rem; }
+    .main-layout { padding: 0 1.25rem 3rem 1.25rem; }
+}
+
+@media (max-width: 768px) {
+    .top-nav {
+        flex-wrap: wrap;
+        row-gap: 0.6rem;
+        padding: 0.75rem 1rem;
+    }
+    .nav-left { gap: 1rem; min-width: 0; flex: 1; }
+    .nav-links {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+    }
+    .nav-links::-webkit-scrollbar { display: none; }
+    .nav-link { white-space: nowrap; }
+
+    .page-header { margin: 0.75rem 0 1.75rem 0; }
+    .page-header h1 { font-size: 1.6rem; }
+    .page-header p { font-size: 0.95rem; }
+    .page-title-bar { flex-wrap: wrap; gap: 0.75rem; align-items: center; }
+
+    /* Banner-style cards stack their left/right halves */
+    .dash-taiq-card, .taiq-trigger-bar, .taiq-running-banner { flex-wrap: wrap; }
+    .dtc-right, .trb-right {
+        width: 100%;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    /* Filter rows: let inputs breathe full-width */
+    .filter-bar, .filter-row, .rv-filter-row, .taiq-filter-row { flex-wrap: wrap; }
+    .filter-row .filter-input, .filter-row .filter-select { flex: 1 1 140px; }
+    .rv-filter-row .filter-input,
+    .taiq-filter-row .filter-input { flex: 1 1 160px; max-width: none; }
+
+    .status-panel-full .state-container { padding: 1.4rem 1.1rem; }
+
+    .notif-bar {
+        left: 0.75rem;
+        right: 0.75rem;
+        justify-content: center;
+    }
+}
+
+@media (max-width: 480px) {
+    .top-nav .cnk-logo { display: none; }
+    .logo { font-size: 1.4rem; }
+
+    .main-layout { padding: 0 0.85rem 3rem 0.85rem; }
+    .page-header h1 { font-size: 1.45rem; }
+
+    .login-wrapper { padding: 1rem; }
+    .login-card { padding: 1.75rem 1.25rem; }
+
+    .rv-modal-overlay, .modal-overlay { padding: 0.75rem; }
+    .rv-modal { padding: 1.1rem 1rem; }
+
+    .trs-stats { flex-wrap: wrap; }
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+}
+

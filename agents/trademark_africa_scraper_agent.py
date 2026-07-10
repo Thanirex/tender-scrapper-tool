@@ -6,9 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
-
-RESULTS_CAP = 20
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class TradeMarkAfricaScraperAgent:
@@ -28,6 +26,7 @@ class TradeMarkAfricaScraperAgent:
             posts = self._fetch_posts(keyword, log)
             log(f"   ↳ {len(posts)} post(s) returned by API")
 
+            n_title_miss = n_neg = n_dup = n_opened = 0
             for post in posts:
                 title = html_mod.unescape(post.get("title", {}).get("rendered", "")).strip()
                 url   = post.get("link", "")
@@ -36,13 +35,22 @@ class TradeMarkAfricaScraperAgent:
                     continue
 
                 if not keyword_matches(keyword, title):
+                    n_title_miss += 1
+                    continue
+
+                neg = find_negative_keyword(title)
+                if neg:
+                    n_neg += 1
+                    log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                     continue
 
                 if db and db.is_duplicate(title, url):
-                    log(f"   ⏩ Duplicate: {title[:60]}")
+                    n_dup += 1
+                    log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                     continue
 
-                log(f"   📄 {title[:70]}")
+                n_opened += 1
+                log(f"   📄 Opening: {title[:70]}")
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "trademarkafrica"
                 rec  = self._process_post(post, keyword, base, log, db)
                 if rec:
@@ -50,27 +58,48 @@ class TradeMarkAfricaScraperAgent:
                     if on_result_ready:
                         on_result_ready(rec)
 
+            log(
+                f"   📊 '{keyword}' summary on TradeMark Africa: {len(posts)} post(s) from the API → "
+                f"{n_title_miss} without the keyword in the title, "
+                f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+                f"{n_opened} processed, {len(results)} saved"
+            )
+
         except Exception as e:
             log(f"❌ TradeMark Africa scrape error: {e}")
 
         return results
 
     def _fetch_posts(self, keyword: str, log) -> list:
-        try:
-            resp = requests.get(
-                self.API_URL,
-                params={
-                    "search":   keyword,
-                    "per_page": RESULTS_CAP,
-                    "_fields":  "id,title,link,date,excerpt,content",
-                },
-                timeout=30,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            log(f"   ⚠️ API error: {e}")
-            return []
+        """Fetch ALL matching posts, walking the WP REST API's pages."""
+        posts: list = []
+        page = 1
+        while True:
+            try:
+                resp = requests.get(
+                    self.API_URL,
+                    params={
+                        "search":   keyword,
+                        "per_page": 100,   # WP REST maximum per request
+                        "page":     page,
+                        "_fields":  "id,title,link,date,excerpt,content",
+                    },
+                    timeout=30,
+                )
+                if resp.status_code == 400:
+                    break   # WP returns 400 for pages past the last one
+                resp.raise_for_status()
+                batch = resp.json()
+            except Exception as e:
+                log(f"   ⚠️ API error: {e}")
+                break
+            if not isinstance(batch, list) or not batch:
+                break
+            posts.extend(batch)
+            if len(batch) < 100:
+                break
+            page += 1
+        return posts
 
     def _process_post(self, post: dict, keyword: str, base_dir: Path, log, db=None) -> dict | None:
         title   = html_mod.unescape(post.get("title",   {}).get("rendered", "")).strip()
@@ -89,6 +118,13 @@ class TradeMarkAfricaScraperAgent:
         m = re.search(r"deadline[:\s]+([^\n<]{5,80})", exc_text, re.IGNORECASE)
         if m:
             deadline = m.group(1).strip().rstrip(".")
+
+        neg = find_negative_keyword(title, body_text)
+        if neg:
+            log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' in post content")
+            if db:
+                db.mark_downloaded(title, url, "trademarkafrica", keyword, deadline)
+            return None
 
         # Extract all document URLs from raw HTML (PDF, DOCX, DOC, XLSX)
         doc_urls = list(dict.fromkeys(re.findall(

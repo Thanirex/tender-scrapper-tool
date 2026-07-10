@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from date_utils import is_within_24h_ist
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class AUScraperAgent:
@@ -39,33 +39,53 @@ class AUScraperAgent:
                 bids = self._collect_all_bids(page, log)
                 log(f"   ↳ {len(bids)} bid(s) found on page")
 
+                n_title_miss = n_neg = n_stale = n_no_date = n_dup = n_opened = 0
                 for bid in bids:
                     title        = bid["title"]
                     url          = bid["url"]
                     release_date = bid["release_date"]
 
                     if not keyword_matches(keyword, title):
+                        n_title_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
                     if release_date:
                         if not is_within_24h_ist(release_date):
-                            log(f"   📅 Skipping '{title[:55]}' — posted {release_date} (>24h)")
+                            n_stale += 1
+                            log(f"   📅 Skipping '{title[:55]}' — matched, but posted {release_date} (>24h ago)")
                             continue
                     else:
+                        n_no_date += 1
                         log(f"   ⚠️ No date in URL for '{title[:55]}' — skipping")
                         continue
 
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "au"
                     rec = self._extract_tender(ctx, url, keyword, title, release_date, base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on AU: {len(bids)} bid(s) listed → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_stale} older than 24h, "
+                    f"{n_no_date} missing a date, {n_dup} already collected, "
+                    f"{n_opened} opened for full check, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ AU scrape error: {e}")
@@ -77,13 +97,15 @@ class AUScraperAgent:
     def _collect_all_bids(self, page, log) -> list:
         """Collect bids across all pages (handles pagination if present)."""
         bids = []
-        page_count = 0
-        max_pages  = 20
+        seen_urls: set = set()
 
-        while page_count < max_pages:
+        while True:
             page_bids = self._collect_page_bids(page, log)
-            bids.extend(page_bids)
-            page_count += 1
+            new_bids  = [b for b in page_bids if b["url"] not in seen_urls]
+            if not new_bids:
+                break   # empty page, or pagination looped back on itself
+            seen_urls.update(b["url"] for b in new_bids)
+            bids.extend(new_bids)
 
             # Follow "next page" link if present
             try:
@@ -161,6 +183,13 @@ class AUScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "au", keyword, release_date)
+                return None
 
             # Extract bid number and deadline from <p> tags
             bid_number = ""

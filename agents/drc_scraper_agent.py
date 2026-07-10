@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
 from date_utils import is_within_24h_ist
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 # JS to scrape all tender entries from the DRC listing page.
 # Page uses <article class="tenderList__item"> with data-* attributes
@@ -78,6 +78,7 @@ class DRCScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "drc"
 
+                n_title_miss = n_neg = n_closed = n_stale = n_dup = n_opened = 0
                 for row in rows:
                     title     = row["title"]
                     url       = row["url"]
@@ -87,32 +88,51 @@ class DRCScraperAgent:
 
                     # ── Keyword filter ────────────────────────────────────────
                     if not keyword_matches(keyword, title):
+                        n_title_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
                     # ── Active check — skip archived/expired tenders ──────────
                     if status in ("archived", "expired", "closed"):
-                        log(f"   ⏭ {status.capitalize()}: {title[:60]}")
+                        n_closed += 1
+                        log(f"   ⏭ Skipping '{title[:60]}' — tender is {status}")
                         continue
 
                     # ── 24-hour publication check ─────────────────────────────
                     if published:
                         if not is_within_24h_ist(published):
-                            log(f"   📅 Skipping '{title[:60]}' — published {published} (>24h ago)")
+                            n_stale += 1
+                            log(f"   📅 Skipping '{title[:60]}' — matched, but published {published} (>24h ago)")
                             continue
                     else:
                         log(f"   ⚠️ No published date for '{title[:60]}' — processing anyway")
 
                     # ── Dedup check ───────────────────────────────────────────
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     rec = self._extract_detail(ctx, url, keyword, title, published, deadline, base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on DRC: {len(rows)} tender(s) listed → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_closed} archived/expired, "
+                    f"{n_stale} older than 24h, {n_dup} already collected, "
+                    f"{n_opened} opened for full check, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ DRC scrape error: {e}")
@@ -144,6 +164,13 @@ class DRCScraperAgent:
 
             body_text = re.sub(r"[ \t]+", " ", body_text)
             body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "drc", keyword, deadline)
+                return None
 
             # Collect document links from the copy section
             doc_links = detail.evaluate(f"""

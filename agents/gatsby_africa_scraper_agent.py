@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class GatsbyAfricaScraperAgent:
@@ -40,20 +40,35 @@ class GatsbyAfricaScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "gatsbyafrica"
 
+                n_neg = n_dup = n_opened = 0
                 for tender in tenders:
                     title = tender["title"]
                     url   = tender["url"]
 
-                    if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                    neg = find_negative_keyword(title)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
-                    log(f"   📄 {title[:70]}")
+                    if db and db.is_duplicate(title, url):
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                        continue
+
+                    n_opened += 1
+                    log(f"   📄 Opening: {title[:70]}")
                     rec = self._extract_detail(ctx, url, keyword, title, base, log, db)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on Gatsby Africa: {len(tenders)} keyword match(es) → "
+                    f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+                    f"{n_opened} opened for full check, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ Gatsby Africa scrape error: {e}")
@@ -222,6 +237,13 @@ class GatsbyAfricaScraperAgent:
                 body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
             except Exception:
                 body_text = ""
+
+            neg = find_negative_keyword(title, body_text)
+            if neg:
+                log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
+                if db:
+                    db.mark_downloaded(title, url, "gatsbyafrica", keyword, "")
+                return None
 
             # All document links — PDFs from /app/uploads/ and any "RFP/download/view" links
             doc_links = detail_page.eval_on_selector_all(

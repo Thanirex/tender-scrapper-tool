@@ -312,6 +312,7 @@ def run_daily_job():
             from agents.drc_scraper_agent import DRCScraperAgent
             from agents.jsi_scraper_agent import JSIScraperAgent
             from agents.chai_scraper_agent import CHAIScraperAgent
+            from agents.reliefweb_scraper_agent import ReliefWebScraperAgent
             from agents.file_reader import read_file as _read_file
             std_agent          = ScraperAgent(str(APP_DIR / "sites_config.json"))
             nasscom_agent      = NasscomScraperAgent()
@@ -325,6 +326,7 @@ def run_daily_job():
             drc_agent          = DRCScraperAgent()
             jsi_agent          = JSIScraperAgent()
             chai_agent         = CHAIScraperAgent()
+            reliefweb_agent    = ReliefWebScraperAgent()
 
             for phase_idx, site_key in enumerate(standard_sites, start=2):
                 if _stop_event.is_set():
@@ -1036,6 +1038,64 @@ def run_daily_job():
                             output_dir=str(run_dir / site_key),
                             log_callback=_progress_log,
                             on_result_ready=on_chai_result,
+                            db=proxy,
+                        ))
+
+                    elif scraper_type == "reliefweb":
+                        # ── ReliefWeb Jobs (search + pagination, page-content only) ──
+                        def on_reliefweb_result(res, _kw=keyword, _site=site_key):
+                            nonlocal total_tenders
+                            _check_stop()
+
+                            title = res.get("title", "Unknown")
+                            _write_log(f"  📊 Summarising: {title[:70]}")
+
+                            text_parts = []
+                            page_text  = res.get("page_text", "").strip()
+                            if page_text:
+                                text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+                            combined = "\n\n".join(text_parts)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+
+                            tender_dir_abs = Path(res.get("tender_dir", ""))
+                            safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+                            excel_path     = str(tender_dir_abs / f"Level1_{safe_title}.xlsx")
+
+                            record = {
+                                "keyword":    _kw,
+                                "title":      title,
+                                "url":        res.get("url", ""),
+                                "site":       _site,
+                                "fields":     fields,
+                                "files":      res.get("files", []),
+                                "tender_dir": res.get("tender_dir", ""),
+                            }
+                            write_level1_report([record], excel_path)
+
+                            tender_dir_rel = ""
+                            try:
+                                tender_dir_rel = str(
+                                    tender_dir_abs.relative_to(DOWNLOADS_DIR)
+                                ).replace("\\", "/")
+                            except ValueError:
+                                pass
+
+                            _db.record_cron_tender(
+                                run_id=run_id, keyword=_kw, title=title,
+                                url=res.get("url", ""), site=_site,
+                                published_date=res.get("published", ""), summary=fields,
+                                tender_dir=tender_dir_rel,
+                            )
+                            total_tenders += 1
+                            _db.update_cron_run(run_id, total_tenders=total_tenders)
+                            _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
+
+                        _run_step_safely(site_key.upper(), lambda: reliefweb_agent.search(
+                            keyword,
+                            output_dir=str(run_dir / site_key),
+                            log_callback=_progress_log,
+                            on_result_ready=on_reliefweb_result,
                             db=proxy,
                         ))
 

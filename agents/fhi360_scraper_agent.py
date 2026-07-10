@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 _JS_DIAG = """
 () => ({
@@ -143,18 +143,27 @@ class FHI360ScraperAgent:
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "fhi360"
 
+                n_miss = n_neg = n_dup = 0
                 for sol in solicitations:
                     title = sol["title"]
                     text  = sol["text"]
                     links = sol["links"]
 
                     if not keyword_matches(keyword, title, text):
+                        n_miss += 1
+                        continue
+
+                    neg = find_negative_keyword(title, text)
+                    if neg:
+                        n_neg += 1
+                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
                         continue
 
                     url = links[0] if links else self.PAGE_URL
 
                     if db and db.is_duplicate(title, url):
-                        log(f"   ⏩ Duplicate: {title[:60]}")
+                        n_dup += 1
+                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
                     log(f"   📄 {title[:70]}")
@@ -195,6 +204,12 @@ class FHI360ScraperAgent:
                     results.append(rec)
                     if on_result_ready:
                         on_result_ready(rec)
+
+                log(
+                    f"   📊 '{keyword}' summary on FHI 360: {len(solicitations)} solicitation(s) listed → "
+                    f"{n_miss} without the keyword, {n_neg} blocked by negative keywords, "
+                    f"{n_dup} already collected, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ FHI 360 scrape error: {e}")

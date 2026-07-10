@@ -7,7 +7,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches
+from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class NasscomScraperAgent:
@@ -33,6 +33,7 @@ class NasscomScraperAgent:
                 items = page.locator("#PressReleases li").all()
                 log(f"   ↳ {len(items)} RFP entries on page.")
 
+                n_title_miss = n_neg = n_no_pdf = n_dup = n_err = 0
                 for item in items:
                     try:
                         # Full text of <li>, strip out "Click here" link text to get clean title
@@ -45,6 +46,13 @@ class NasscomScraperAgent:
                             continue
 
                         if not keyword_matches(keyword, title):
+                            n_title_miss += 1
+                            continue
+
+                        neg = find_negative_keyword(title)
+                        if neg:
+                            n_neg += 1
+                            log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                             continue
 
                         # All PDF links in this <li> — take the last one (main doc, not cover letter)
@@ -52,6 +60,7 @@ class NasscomScraperAgent:
                         pdf_links = [el.evaluate('e => e.href') for el in pdf_els]
                         pdf_links = [u for u in pdf_links if u]
                         if not pdf_links:
+                            n_no_pdf += 1
                             log(f"   ⚠️ No PDF found for: {title[:55]}")
                             continue
 
@@ -59,7 +68,8 @@ class NasscomScraperAgent:
 
                         # Dedup by PDF URL — title alone could collide across keywords
                         if db and db.is_duplicate(title, pdf_url):
-                            log(f"   ⏩ Duplicate skipped: {title[:60]}")
+                            n_dup += 1
+                            log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                             continue
 
                         safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
@@ -98,8 +108,16 @@ class NasscomScraperAgent:
                             on_result_ready(rec)
 
                     except Exception as row_err:
+                        n_err += 1
                         log(f"   ⚠️ Row error: {row_err}")
                         continue
+
+                log(
+                    f"   📊 '{keyword}' summary on Nasscom: {len(items)} RFP(s) listed → "
+                    f"{n_title_miss} without the keyword in the title, "
+                    f"{n_neg} blocked by negative keywords, {n_no_pdf} without a PDF, "
+                    f"{n_dup} already collected, {n_err} errored, {len(results)} saved"
+                )
 
             except Exception as e:
                 log(f"❌ Nasscom scrape error: {e}")
