@@ -292,3 +292,37 @@ in one path must be mirrored in the other. The two `on_tender_ready` callbacks
 | `⚠️ Summarizer returned no fields for: ...` | Gemini returned `{}` — likely rate-limited or safety-filtered |
 | `✅ Logged in.` | UNGM session established |
 | `⚠️ Session expired — redirected to login. Skipping.` | UNGM session dropped mid-run |
+
+---
+
+## 12. Log Markers Are a CONTRACT — Report Cards Parse Them
+
+`run_stats.py` (`RunStatsCollector`) builds the report cards shown on the
+dashboard, the TAiQ page, and the manual scraper page by **parsing the log
+stream**. The markers below are therefore a contract: changing their wording or
+emoji silently breaks the rejection counts on every report card.
+
+| Marker (must appear in the line) | Counted as |
+|---|---|
+| `🚫` + `not in title` | keyword not in title |
+| `🚫` + `negative keyword` | blocked by negative keyword |
+| `📅` | published more than 24 h ago |
+| `⚠️` + `No publication date` or `No date in URL` | no publish date found |
+| `⏭` | archived / expired / closed |
+| `⏩` | duplicate (already collected) |
+| `⚠️` + `Error on row` or `Row error` | row-level scrape error |
+| `📊 '<kw>' summary on <SITE>: N …` | per-keyword rollup — counts in prose (`N without the keyword`, `N blocked by negative keywords`, `N older than 24h`, `N missing a publish date`, `N archived/expired`, `N already collected`, `N errored`) |
+| `🌐 Phase X / Y — SITE` (cron only) | switches the site all following lines are attributed to |
+| `✅ Saved tender #N` (cron only) | one saved tender |
+| `N tenders processed for '<kw>'` (UNGM) | one keyword finished |
+
+**When adding a new agent:**
+1. Emit the same per-line markers for every skip/reject (copy an existing agent).
+2. Emit the `📊 '<keyword>' summary on <SITE>: …` line at the end of each keyword
+   using the exact phrases above — this is what backfills skips that were not
+   logged per-line.
+3. Never re-use these emoji (`🚫 📅 ⏭ ⏩ 📊`) for log lines that are not
+   rejections/rollups, or the counters will over-count.
+4. `saved` is **not** parsed from agent logs — the runner counts it exactly when
+   a tender is written to the DB (`record_saved()` in `api.py` result_cb /
+   `✅ Saved tender #` in `cron_runner.py`).

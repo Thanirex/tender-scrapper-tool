@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import asyncio
 import platform
 import zipfile
@@ -21,6 +22,7 @@ from paths import APP_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, DB_PATH, init as _init_pa
 from db import TenderDB
 from auth import decode_token, hash_password
 from date_utils import now_ist_naive
+from run_stats import RunStatsCollector
 
 load_dotenv(APP_DIR / ".env")
 
@@ -1355,16 +1357,36 @@ async def websocket_endpoint(
         credentials = data.get("credentials", {})
         loop        = asyncio.get_running_loop()
 
+        # Live report card for this run — fed by the same log stream the
+        # user sees, plus exact saved counts from result_cb below.
+        stats          = RunStatsCollector(site=site_key)
+        _last_progress = {"t": 0.0}
+
+        def _send_progress(force: bool = False):
+            now = time.monotonic()
+            if not force and now - _last_progress["t"] < 2.0:
+                return
+            _last_progress["t"] = now
+            snap = stats.snapshot()
+            snap["total_keywords"] = len(keywords)
+            asyncio.run_coroutine_threadsafe(
+                websocket.send_json({"type": "progress", "data": snap}), loop
+            )
+
         def log_cb(msg):
+            stats.feed(msg)
             asyncio.run_coroutine_threadsafe(
                 websocket.send_json({"type": "log", "message": msg}), loop
             )
+            _send_progress()
 
         # Create session and track tenders per keyword
         session_id     = _db.create_session(user_id, site_key)
         keyword_counts: dict[str, int] = {}
 
         def result_cb(record):
+            stats.record_saved()
+            _send_progress(force=True)
             kw = record.get("keyword", "")
             keyword_counts[kw] = keyword_counts.get(kw, 0) + 1
 
@@ -1501,6 +1523,13 @@ async def websocket_endpoint(
 
                 _db.update_session_status(session_id, "complete")
 
+                # Final report card — sent before "complete" so the client
+                # renders the summary the moment the run ends.
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json({"type": "summary", "data": stats.to_dict()}),
+                    loop,
+                )
+
                 if result and zip_path and zip_path.exists():
                     _db.update_session_zip(session_id, zip_path.name)
                     asyncio.run_coroutine_threadsafe(
@@ -1524,6 +1553,11 @@ async def websocket_endpoint(
                 for line in traceback.format_exc().strip().splitlines():
                     if line.strip():
                         log_cb(f"   {line}")
+                # Partial report card — show what was covered before the crash
+                asyncio.run_coroutine_threadsafe(
+                    websocket.send_json({"type": "summary", "data": stats.to_dict()}),
+                    loop,
+                )
                 asyncio.run_coroutine_threadsafe(
                     websocket.send_json({"type": "error", "message": err_repr}), loop
                 )

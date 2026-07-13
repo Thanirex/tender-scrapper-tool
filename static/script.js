@@ -60,6 +60,79 @@ document.addEventListener('DOMContentLoaded', () => {
     let keywordCountMap = {};
     let stepGoneTimers  = {};
     let thoughtTimer    = null;
+    let runSummaryStats = null;
+
+    // ── Live progress panel + end-of-run report card ──────────────────────
+
+    const livePanel  = document.getElementById('live-progress');
+    const lppSite    = document.getElementById('lpp-site');
+    const lppKw      = document.getElementById('lpp-kw');
+    const lppKwDone  = document.getElementById('lpp-kw-done');
+    const lppSaved   = document.getElementById('lpp-saved');
+    const lppRejected = document.getElementById('lpp-rejected');
+    const lppBar     = document.getElementById('lpp-bar');
+
+    const REASON_LABELS = {
+        title_miss: 'keyword not in title',
+        negative:   'blocked by negative keywords',
+        stale:      'older than 24 hours',
+        no_date:    'no publish date found',
+        closed:     'archived or expired',
+        duplicate:  'already collected earlier',
+        error:      'errored while scraping',
+    };
+
+    function updateLivePanel(p, siteLabel) {
+        if (!livePanel) return;
+        livePanel.classList.add('active');
+        if (siteLabel) lppSite.textContent = `Scraping ${siteLabel}`;
+        lppKw.textContent = p.current_keyword ? `now searching "${p.current_keyword}"` : '';
+        const total = p.total_keywords || 0;
+        lppKwDone.textContent = total ? `${p.keywords_done} / ${total}` : p.keywords_done;
+        lppSaved.textContent    = p.saved;
+        lppRejected.textContent = p.rejected;
+        if (lppBar && total) {
+            lppBar.style.width = `${Math.min(100, Math.round(100 * p.keywords_done / total))}%`;
+        }
+    }
+
+    function renderRunSummaryCard(stats) {
+        const card = document.getElementById('run-summary-card');
+        if (!card) return;
+        if (!stats || !stats.totals) {
+            card.classList.add('hidden');
+            card.innerHTML = '';
+            return;
+        }
+        const t = stats.totals;
+        const reasons = Object.entries(t.rejected || {})
+            .filter(([, n]) => n > 0)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, n]) => `<span class="rrc-reason"><strong>${n}</strong> ${REASON_LABELS[k] || k}</span>`)
+            .join('');
+        const siteRows = Object.entries(stats.sites || {}).map(([site, s]) => `
+            <tr>
+                <td>${site.toUpperCase()}</td>
+                <td>${s.listed}</td>
+                <td class="rrc-td-saved">${s.saved}</td>
+                <td>${s.rejected_total}</td>
+            </tr>`).join('');
+        card.innerHTML = `
+            <div class="rrc-title">📋 Run Report — why results were kept or filtered</div>
+            <div class="rrc-headline">
+                <div class="rrc-stat"><span class="rrc-stat-num">${t.listed}</span><span class="rrc-stat-label">results looked at</span></div>
+                <div class="rrc-stat rrc-stat-saved"><span class="rrc-stat-num">${t.saved}</span><span class="rrc-stat-label">tenders saved</span></div>
+                <div class="rrc-stat rrc-stat-rejected"><span class="rrc-stat-num">${t.rejected_total}</span><span class="rrc-stat-label">filtered out</span></div>
+            </div>
+            ${reasons ? `<div class="rrc-reasons">${reasons}</div>` : ''}
+            ${siteRows ? `
+            <table class="rrc-sites-table">
+                <thead><tr><th>Website</th><th>Looked at</th><th>Saved</th><th>Filtered</th></tr></thead>
+                <tbody>${siteRows}</tbody>
+            </table>` : ''}
+        `;
+        card.classList.remove('hidden');
+    }
 
     // ── Step 2 lock/unlock based on selected site ─────────────────────────
 
@@ -373,8 +446,20 @@ document.addEventListener('DOMContentLoaded', () => {
         currentKeyword  = '';
         keywordCountMap = {};
         stepGoneTimers  = {};
+        runSummaryStats = null;
         if (thoughtStream) thoughtStream.innerHTML = '';
         if (logsContent) logsContent.innerHTML = '';
+
+        // Reset live progress panel + previous run's report card
+        const siteLabel = siteSelect.options[siteSelect.selectedIndex]?.text || site.toUpperCase();
+        livePanel?.classList.remove('active');
+        if (lppSite)     lppSite.textContent = `Scraping ${siteLabel}`;
+        if (lppKw)       lppKw.textContent = '';
+        if (lppKwDone)   lppKwDone.textContent = '0';
+        if (lppSaved)    lppSaved.textContent = '0';
+        if (lppRejected) lppRejected.textContent = '0';
+        if (lppBar)      lppBar.style.width = '0%';
+        document.getElementById('run-summary-card')?.classList.add('hidden');
 
         // Reset tracker steps
         ['connecting', 'login', 'searching', 'extracting'].forEach(id => {
@@ -466,6 +551,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     pushThought(friendly);
                 }
 
+            } else if (msg.type === 'progress') {
+                updateLivePanel(msg.data, siteLabel);
+
+            } else if (msg.type === 'summary') {
+                runSummaryStats = msg.data;
+
             } else if (msg.type === 'result') {
                 allResults.push(msg.data);
                 foundCount++;
@@ -474,6 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 finishRun(msg.zip);
 
             } else if (msg.type === 'error') {
+                livePanel?.classList.remove('active');
                 statusBadge.className = 'status-badge';
                 statusBadge.style.background = 'var(--danger)';
                 statusBadge.style.color = 'white';
@@ -497,6 +589,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         function finishRun(zipFilename) {
             hideNotif();
+            livePanel?.classList.remove('active');
+            renderRunSummaryCard(runSummaryStats);
 
             // Mark the run as finished FIRST so the normal socket close
             // that follows is not mistaken for an error.

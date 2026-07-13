@@ -3437,3 +3437,206 @@ a { text-decoration: none; }
     .stats-row { grid-template-columns: repeat(2, 1fr); }
 }
 
+
+/* ═══ Report cards (dashboard 3-day strip, TAiQ run report, scraper live view) ═══ */
+
+.daily-report-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.85rem;
+    margin-bottom: 1rem;
+}
+.day-report-card {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 0.9rem 1.1rem 0.8rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    position: relative;
+    overflow: hidden;
+}
+.day-report-card::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: #cbd5e1;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+.day-report-card.drc-today::after { background: var(--accent); }
+.drc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+.drc-day  { font-weight: 700; font-size: 0.88rem; color: var(--text-main); }
+.drc-date { font-weight: 500; font-size: 0.75rem; color: var(--text-light); }
+.drc-chip {
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: #f1f5f9;
+    color: var(--text-muted);
+}
+.drc-chip-complete { background: #dcfce7; color: #15803d; }
+.drc-chip-running  { background: #fef3c7; color: #b45309; }
+.drc-chip-failed   { background: #fee2e2; color: #b91c1c; }
+.drc-chip-stopped  { background: #f3e8ff; color: #7e22ce; }
+.drc-main { display: flex; align-items: baseline; gap: 0.45rem; }
+.drc-num  { font-size: 1.75rem; font-weight: 800; color: var(--text-main); line-height: 1; }
+.drc-num-label { font-size: 0.78rem; color: var(--text-muted); }
+.drc-line { font-size: 0.76rem; color: var(--text-muted); }
+.drc-review {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    font-size: 0.76rem;
+}
+.drc-rv-app { color: #15803d; font-weight: 600; }
+.drc-rv-rej { color: #b91c1c; font-weight: 600; }
+.drc-rv-pen { color: #b45309; font-weight: 600; }
+.drc-rv-rate {
+    margin-left: auto;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--accent-text);
+    background: var(--accent-light);
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+}
+.drc-bar-track {
+    height: 5px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    overflow: hidden;
+}
+.drc-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.4s ease;
+}
+.drc-bar-label { font-size: 0.68rem; color: var(--text-light); }
+
+/* ── Run report card (TAiQ page + manual scraper summary) ── */
+.run-report-card {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 1rem 1.2rem;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 1rem;
+}
+.rrc-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    font-size: 0.95rem;
+    color: var(--text-main);
+    margin-bottom: 0.75rem;
+}
+.rrc-headline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1.6rem;
+    margin-bottom: 0.9rem;
+}
+.rrc-stat { display: flex; flex-direction: column; gap: 0.1rem; }
+.rrc-stat-num   { font-size: 1.45rem; font-weight: 800; color: var(--text-main); line-height: 1.1; }
+.rrc-stat-label { font-size: 0.72rem; color: var(--text-muted); }
+.rrc-stat-saved .rrc-stat-num    { color: #15803d; }
+.rrc-stat-rejected .rrc-stat-num { color: #b91c1c; }
+.rrc-reasons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin-bottom: 0.9rem;
+}
+.rrc-reason {
+    font-size: 0.74rem;
+    font-weight: 500;
+    padding: 0.22rem 0.6rem;
+    border-radius: 999px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+}
+.rrc-reason strong { color: var(--text-main); font-weight: 700; }
+.rrc-sites-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.rrc-sites-table th {
+    text-align: left;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-light);
+    padding: 0.3rem 0.5rem;
+    border-bottom: 1px solid var(--border);
+}
+.rrc-sites-table td {
+    padding: 0.34rem 0.5rem;
+    border-bottom: 1px solid #f1f5f9;
+    color: var(--text-muted);
+}
+.rrc-sites-table td:first-child { font-weight: 600; color: var(--text-main); }
+.rrc-sites-table .rrc-td-saved  { color: #15803d; font-weight: 700; }
+.rrc-empty { font-size: 0.8rem; color: var(--text-light); }
+
+/* ── Live progress panel (manual scraper) ── */
+.live-progress-panel {
+    display: none;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-xl);
+    padding: 0.85rem 1.1rem;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 0.85rem;
+}
+.live-progress-panel.active { display: block; }
+.lpp-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.6rem;
+}
+.lpp-spinner {
+    width: 12px; height: 12px;
+    border: 2px solid var(--accent-light);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: lpp-spin 0.9s linear infinite;
+    flex-shrink: 0;
+}
+@keyframes lpp-spin { to { transform: rotate(360deg); } }
+.lpp-title  { font-weight: 700; font-size: 0.85rem; color: var(--text-main); }
+.lpp-kw     { font-size: 0.76rem; color: var(--text-muted); margin-left: auto; }
+.lpp-stats  { display: flex; flex-wrap: wrap; gap: 1.4rem; margin-bottom: 0.55rem; }
+.lpp-stat   { display: flex; align-items: baseline; gap: 0.35rem; }
+.lpp-stat-num   { font-size: 1.15rem; font-weight: 800; color: var(--text-main); }
+.lpp-stat-label { font-size: 0.72rem; color: var(--text-muted); }
+.lpp-saved .lpp-stat-num    { color: #15803d; }
+.lpp-rejected .lpp-stat-num { color: #b91c1c; }
+.lpp-bar-track {
+    height: 6px;
+    border-radius: 999px;
+    background: #f1f5f9;
+    overflow: hidden;
+}
+.lpp-bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 0.5s ease;
+}
+
+@media (max-width: 900px) {
+    .daily-report-row { grid-template-columns: 1fr; }
+    .rrc-headline { gap: 1rem; }
+}

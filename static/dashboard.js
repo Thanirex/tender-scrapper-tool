@@ -131,6 +131,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
     loadTaiqStatus();
 
+    // ── Last 3 days report cards ───────────────────────────────────────────
+    async function loadDailyReport() {
+        const row = document.getElementById('daily-report-row');
+        if (!row) return;
+        const res = await authFetch('/dashboard/report?days=3');
+        if (!res) return;
+        const { days } = await res.json();
+        if (!days || !days.length) { row.innerHTML = ''; return; }
+
+        const names = ['Today', 'Yesterday'];
+        row.innerHTML = days.map((d, i) => {
+            const name     = names[i] || _pretty(d.date);
+            const sub      = names[i] ? _pretty(d.date) : '';
+            const reviewed = d.approved + d.rejected;
+            const pct      = d.scraped ? Math.round(100 * reviewed / d.scraped) : 0;
+            const chipMap  = {
+                complete: ['🤖 auto-run done', 'drc-chip-complete'],
+                running:  ['🤖 running now',   'drc-chip-running'],
+                failed:   ['🤖 run failed',    'drc-chip-failed'],
+                stopped:  ['🤖 run stopped',   'drc-chip-stopped'],
+            };
+            const [chipLbl, chipCls] = chipMap[d.taiq_status] || ['🤖 no auto run', 'drc-chip-none'];
+            return `
+            <div class="day-report-card${i === 0 ? ' drc-today' : ''}">
+                <div class="drc-head">
+                    <span class="drc-day">${name}${sub ? ` <span class="drc-date">· ${sub}</span>` : ''}</span>
+                    <span class="drc-chip ${chipCls}">${chipLbl}</span>
+                </div>
+                <div class="drc-main">
+                    <span class="drc-num">${d.scraped}</span>
+                    <span class="drc-num-label">tender${d.scraped !== 1 ? 's' : ''} scraped</span>
+                </div>
+                <div class="drc-line">🤖 ${d.taiq} TAiQ &nbsp;·&nbsp; 👤 ${d.manual} manual</div>
+                <div class="drc-line">🌐 ${d.sites_scanned} site${d.sites_scanned !== 1 ? 's' : ''} scanned · ${d.sites_with_results} gave results</div>
+                <div class="drc-review">
+                    <span class="drc-rv drc-rv-app" title="Approved">✅ ${d.approved}</span>
+                    <span class="drc-rv drc-rv-rej" title="Rejected">❌ ${d.rejected}</span>
+                    <span class="drc-rv drc-rv-pen" title="Awaiting review">⏳ ${d.pending} pending</span>
+                    ${d.approval_rate !== null && d.approval_rate !== undefined
+                        ? `<span class="drc-rv-rate">${d.approval_rate}% approved</span>` : ''}
+                </div>
+                <div class="drc-bar-track" title="${pct}% of this day's tenders reviewed">
+                    <div class="drc-bar-fill" style="width:${pct}%"></div>
+                </div>
+                <div class="drc-bar-label">${reviewed} of ${d.scraped} reviewed</div>
+            </div>`;
+        }).join('');
+    }
+
+    loadDailyReport();
+    setInterval(loadDailyReport, 5 * 60 * 1000);   // stays fresh across midnight
+
     // Load dates that have data, then bootstrap
     authFetch('/dashboard/dates')
         .then(r => r && r.json())

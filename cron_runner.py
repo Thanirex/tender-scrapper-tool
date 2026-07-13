@@ -14,6 +14,7 @@ _scheduler      = None
 _db             = None
 _stop_event     = threading.Event()
 _current_run_id: "int | None" = None
+_stats          = None   # run_stats.RunStatsCollector for the active run
 
 # ── Per-run log buffer ─────────────────────────────────────────────────────
 _log_buffer:    list = []
@@ -66,6 +67,12 @@ def _write_log(msg: str):
                 f.write(line + "\n")
         except Exception:
             pass
+    # Every log line also feeds the run report card (see run_stats.py)
+    if _stats is not None:
+        try:
+            _stats.feed(msg)
+        except Exception:
+            pass
 
 
 def _reset_log(run_id: int):
@@ -86,6 +93,32 @@ def _reset_log(run_id: int):
 def _clear_log():
     global _log_file_path
     _log_file_path = None
+
+
+def _finalize_stats() -> "str | None":
+    """Write the end-of-run report card into the log; return its JSON."""
+    if _stats is None:
+        return None
+    from run_stats import REASON_KEYS, REASON_LABELS
+    data = _stats.to_dict()
+    t    = data["totals"]
+    _write_log("═" * 62)
+    _write_log(
+        f"📋 RUN REPORT — {t['sites_scanned']} site(s) scanned, "
+        f"{t['listed']} result(s) seen, {t['saved']} saved, "
+        f"{t['rejected_total']} rejected"
+    )
+    for reason in REASON_KEYS:
+        n = t["rejected"].get(reason, 0)
+        if n:
+            _write_log(f"   • {n} {REASON_LABELS[reason]}")
+    for site, s in data["sites"].items():
+        _write_log(
+            f"   🔎 {site.upper()}: {s['listed']} seen → {s['saved']} saved, "
+            f"{s['rejected_total']} rejected"
+        )
+    _write_log("═" * 62)
+    return json.dumps(data)
 
 
 # ── Keyword loading ────────────────────────────────────────────────────────
@@ -112,7 +145,7 @@ def _load_all_keywords() -> list:
 
 def run_daily_job():
     """Daily TAiQ cron — scrapes ALL configured sites for all keywords at 7am IST."""
-    global _current_run_id
+    global _current_run_id, _stats
 
     from paths import DOWNLOADS_DIR, APP_DIR
     from db import CronDBProxy
@@ -151,6 +184,9 @@ def run_daily_job():
 
     run_id          = _db.create_cron_run(total_keywords=total_kw)
     _current_run_id = run_id
+
+    from run_stats import RunStatsCollector
+    _stats = RunStatsCollector()
 
     _reset_log(run_id)
     _db.update_cron_run(run_id, log_file=_log_file_path)
@@ -1235,7 +1271,7 @@ def run_daily_job():
             _db.update_cron_run(
                 run_id, status="stopped", finished_at=finished_at,
                 keywords_done=keywords_done, current_keyword="",
-                total_tenders=total_tenders,
+                total_tenders=total_tenders, stats_json=_finalize_stats(),
             )
             logger.info(
                 f"[TAiQ Cron] Run #{run_id} stopped — "
@@ -1249,7 +1285,7 @@ def run_daily_job():
             _db.update_cron_run(
                 run_id, status="complete", finished_at=finished_at,
                 keywords_done=keywords_done, current_keyword="",
-                total_tenders=total_tenders,
+                total_tenders=total_tenders, stats_json=_finalize_stats(),
             )
             logger.info(
                 f"[TAiQ Cron] Run #{run_id} complete — {total_tenders} tenders found"
@@ -1264,7 +1300,7 @@ def run_daily_job():
         _db.update_cron_run(
             run_id, status="stopped", finished_at=finished_at,
             keywords_done=keywords_done, current_keyword="",
-            total_tenders=total_tenders,
+            total_tenders=total_tenders, stats_json=_finalize_stats(),
         )
         logger.info(
             f"[TAiQ Cron] Run #{run_id} stopped mid-scrape — "
@@ -1284,10 +1320,12 @@ def run_daily_job():
             run_id, status="failed",
             finished_at=now_ist_naive().isoformat(timespec="seconds"),
             current_keyword="", error_msg=err_msg[:500],
+            stats_json=_finalize_stats(),
         )
 
     finally:
         _current_run_id = None
+        _stats          = None
         _stop_event.clear()
         _clear_log()
 

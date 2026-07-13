@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "PowerShell($py = \"C:\\\\Users\\\\Thaneesh\\\\Documents\\\\GitHub\\\\Tender Scrapper tool old\\\\.venv\\\\Scripts\\\\python.exe\"; $base = \"C:\\\\Users\\\\Thaneesh\\\\Documents\\\\GitHub\\\\Tender Scrapper tool old\"; $files = @\\(\"db.py\",\"cron_runner.py\",\"routers\\\\taiq_router.py\"\\); foreach \\($f in $files\\) { $result = & $py -m py_compile \"$base\\\\$f\" 2>&1; if \\($result\\) { Write-Host \"FAIL $f`: $result\" } else { Write-Host \"OK   $f\" } })",
-      "Bash(.venv/Scripts/python.exe -m py_compile agents/scraper_agent.py agents/acbf_scraper_agent.py agents/afrosai_scraper_agent.py agents/au_scraper_agent.py agents/chai_scraper_agent.py agents/drc_scraper_agent.py agents/fhi360_scraper_agent.py agents/gatsby_africa_scraper_agent.py agents/jsi_scraper_agent.py agents/nasscom_scraper_agent.py agents/trademark_africa_scraper_agent.py agents/ungm_scraper_agent.py agents/worldbank_scraper_agent.py agents/reliefweb_scraper_agent.py)"
+      "Bash(.venv/Scripts/python.exe -m py_compile agents/scraper_agent.py agents/acbf_scraper_agent.py agents/afrosai_scraper_agent.py agents/au_scraper_agent.py agents/chai_scraper_agent.py agents/drc_scraper_agent.py agents/fhi360_scraper_agent.py agents/gatsby_africa_scraper_agent.py agents/jsi_scraper_agent.py agents/nasscom_scraper_agent.py agents/trademark_africa_scraper_agent.py agents/ungm_scraper_agent.py agents/worldbank_scraper_agent.py agents/reliefweb_scraper_agent.py)",
+      "PowerShell(py *)"
     ]
   }
 }

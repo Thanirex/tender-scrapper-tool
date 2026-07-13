@@ -26,6 +26,16 @@ async def get_stats(
     return _db(request).get_stats_for_date(date or _today())
 
 
+@router.get("/report")
+async def get_report(
+    request: Request,
+    days: int = Query(default=3, ge=1, le=14),
+    current_user: dict = _auth,
+):
+    """Rolling report cards for the last N days (default 3, newest first)."""
+    return {"days": _db(request).get_daily_report(days)}
+
+
 @router.get("/tenders")
 async def get_tenders(
     request: Request,

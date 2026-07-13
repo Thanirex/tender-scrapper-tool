@@ -235,11 +235,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!data.run) {
             runSummary.classList.add('hidden');
             filterRow.classList.add('hidden');
+            document.getElementById('taiq-report-card')?.classList.add('hidden');
             tendersGrid.innerHTML = '<p class="empty-msg">No run data found for this date.</p>';
             return;
         }
 
         renderRunSummary(data.run);
+        renderRunReport(data.run);
         currentRunId = data.run.id;
         allTenders   = data.tenders || [];
         applyFilter();
@@ -267,6 +269,65 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             errEl.classList.add('hidden');
         }
+    }
+
+    // ── Per-run report card ────────────────────────────────────────────────
+
+    const REASON_LABELS = {
+        title_miss: 'keyword not in title',
+        negative:   'blocked by negative keywords',
+        stale:      'older than 24 hours',
+        no_date:    'no publish date found',
+        closed:     'archived or expired',
+        duplicate:  'already collected earlier',
+        error:      'errored while scraping',
+    };
+
+    function renderRunReport(run) {
+        const card = document.getElementById('taiq-report-card');
+        if (!card) return;
+        let stats = null;
+        try {
+            stats = typeof run.stats_json === 'string'
+                ? JSON.parse(run.stats_json) : run.stats_json;
+        } catch { /* pre-report-card runs have no stats */ }
+
+        if (!stats || !stats.totals || run.status === 'running') {
+            card.classList.add('hidden');
+            card.innerHTML = '';
+            return;
+        }
+
+        const t = stats.totals;
+        const reasons = Object.entries(t.rejected || {})
+            .filter(([, n]) => n > 0)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, n]) => `<span class="rrc-reason"><strong>${n}</strong> ${REASON_LABELS[k] || k}</span>`)
+            .join('');
+        const siteRows = Object.entries(stats.sites || {}).map(([site, s]) => `
+            <tr>
+                <td>${site.toUpperCase()}</td>
+                <td>${s.listed}</td>
+                <td class="rrc-td-saved">${s.saved}</td>
+                <td>${s.rejected_total}</td>
+            </tr>`).join('');
+
+        card.innerHTML = `
+            <div class="rrc-title">📋 Run Report</div>
+            <div class="rrc-headline">
+                <div class="rrc-stat"><span class="rrc-stat-num">${t.sites_scanned}</span><span class="rrc-stat-label">sites scanned</span></div>
+                <div class="rrc-stat"><span class="rrc-stat-num">${t.listed}</span><span class="rrc-stat-label">results looked at</span></div>
+                <div class="rrc-stat rrc-stat-saved"><span class="rrc-stat-num">${t.saved}</span><span class="rrc-stat-label">tenders saved</span></div>
+                <div class="rrc-stat rrc-stat-rejected"><span class="rrc-stat-num">${t.rejected_total}</span><span class="rrc-stat-label">filtered out</span></div>
+            </div>
+            ${reasons ? `<div class="rrc-reasons">${reasons}</div>` : ''}
+            ${siteRows ? `
+            <table class="rrc-sites-table">
+                <thead><tr><th>Website</th><th>Looked at</th><th>Saved</th><th>Filtered</th></tr></thead>
+                <tbody>${siteRows}</tbody>
+            </table>` : '<p class="rrc-empty">No per-site details recorded for this run.</p>'}
+        `;
+        card.classList.remove('hidden');
     }
 
     function applyFilter() {

@@ -369,6 +369,8 @@ class TenderDB:
             self._add_col(conn, "cron_runs", "stop_requested",  "INTEGER NOT NULL DEFAULT 0")
             self._add_col(conn, "cron_runs", "current_keyword", f"{_KW_TEXT} NOT NULL DEFAULT ''")
             self._add_col(conn, "cron_runs", "log_file",        "TEXT")
+            # Per-run report card (JSON from run_stats.RunStatsCollector)
+            self._add_col(conn, "cron_runs", "stats_json",      "TEXT")
             self._idx(conn, False, "idx_cron_runs_date", "cron_runs", "run_date", prefix=10)
 
             # ── TAiQ cron tenders ──────────────────────────────────────────
@@ -694,6 +696,94 @@ class TenderDB:
         cron_dates   = {r["run_date"] for r in cron_rows}
         return sorted(manual_dates | cron_dates, reverse=True)[:90]
 
+    def get_daily_report(self, days: int = 3) -> "list[dict]":
+        """Report cards for the last `days` IST days, newest first.
+
+        Per day: tenders scraped (TAiQ vs manual split), site coverage
+        (scanned vs produced results) and review progress for the tenders
+        found that day.
+        """
+        from datetime import timedelta
+        report: list = []
+        today = now_ist_naive().date()
+
+        with self._connect() as conn:
+            for i in range(max(1, days)):
+                d    = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+                like = f"{d}%"
+
+                # ── TAiQ run of the day ────────────────────────────────────
+                cron_row = conn.execute(
+                    "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
+                    (d,),
+                ).fetchone()
+                taiq_count    = (cron_row["total_tenders"] or 0) if cron_row else 0
+                scanned: set  = set()
+                produced: set = set()
+                if cron_row:
+                    try:
+                        stats = json.loads(cron_row.get("stats_json") or "{}")
+                        scanned |= {s.lower() for s in stats.get("sites", {})}
+                    except Exception:
+                        pass
+                    rows = conn.execute(
+                        "SELECT DISTINCT site FROM cron_tenders WHERE run_id = ?",
+                        (cron_row["id"],),
+                    ).fetchall()
+                    produced |= {(r["site"] or "").lower() for r in rows if r["site"]}
+
+                # ── Manual sessions of the day ─────────────────────────────
+                manual_count = conn.execute(
+                    """SELECT COUNT(ft.id) AS n
+                       FROM found_tenders ft
+                       JOIN search_sessions s ON s.id = ft.session_id
+                       WHERE s.run_date = ?""",
+                    (d,),
+                ).fetchone()["n"]
+                for r in conn.execute(
+                    """SELECT s.site, COUNT(ft.id) AS n
+                       FROM search_sessions s
+                       LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                       WHERE s.run_date = ?
+                       GROUP BY s.site""",
+                    (d,),
+                ).fetchall():
+                    site = (r["site"] or "").lower()
+                    if site:
+                        scanned.add(site)
+                        if r["n"]:
+                            produced.add(site)
+                scanned |= produced
+
+                # ── Review progress for tenders found that day ─────────────
+                counts = {"approved": 0, "rejected": 0, "pending": 0}
+                for table in self._REVIEW_SOURCES.values():
+                    for r in conn.execute(
+                        f"""SELECT COALESCE(review_status, 'pending') AS st,
+                                   COUNT(*) AS n
+                            FROM {table} WHERE found_at LIKE ?
+                            GROUP BY COALESCE(review_status, 'pending')""",
+                        (like,),
+                    ).fetchall():
+                        counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
+                decided = counts["approved"] + counts["rejected"]
+
+                report.append({
+                    "date":            d,
+                    "scraped":         taiq_count + manual_count,
+                    "taiq":            taiq_count,
+                    "manual":          manual_count,
+                    "taiq_status":     cron_row["status"] if cron_row else None,
+                    "sites_scanned":   len(scanned),
+                    "sites_with_results": len(produced),
+                    "approved":        counts["approved"],
+                    "rejected":        counts["rejected"],
+                    "pending":         counts["pending"],
+                    "approval_rate":   (round(100 * counts["approved"] / decided)
+                                        if decided else None),
+                })
+        return report
+
     # ── Activity logging ───────────────────────────────────────────────────────
 
     def log_activity(self, user_id: int, username: str, action: str,
@@ -745,7 +835,7 @@ class TenderDB:
     def update_cron_run(self, run_id: int, **kwargs):
         allowed = {"status", "finished_at", "keywords_done", "total_tenders",
                    "error_msg", "total_keywords", "current_keyword",
-                   "stop_requested", "log_file"}
+                   "stop_requested", "log_file", "stats_json"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
