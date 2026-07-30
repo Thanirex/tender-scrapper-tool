@@ -1,0 +1,21 @@
+{
+    "devnet": {
+        "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
+        "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
+        "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
+        "results_link_selector": "a[id*='lnkJobTitle']",
+        "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
+        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdDesc, #ContentPlaceHolder1_JD1_tdtxtDesc",
+        "skip_date_filter": true
+    },
+    "ungm": {
+        "url": "https://www.ungm.org",
+        "requires_auth": true,
+        "display_name": "UNGM (UN Global Marketplace)"
+    },
+    "nasscom": {
+        "url": "https://www.nasscomfoundation.org/requestproposal",
+        "scraper_type": "nasscom",
+        "skip_date_filter": true
+    }
+}

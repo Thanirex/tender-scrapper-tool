@@ -40,8 +40,14 @@ function _renderNav(user) {
         .join('');
 
     const roleLabels = { superadmin: 'Super Admin', admin: 'Admin', user: 'User' };
+    const teamId = (user.team_id || 'cnk').toLowerCase();
+    const teamName = (user.team_name || teamId).toUpperCase();
+
     userArea.innerHTML = `
         <div class="nav-user">
+            <span class="team-badge team-${teamId}">
+                <span class="team-dot"></span>${teamName} PORTAL
+            </span>
             <span class="nav-username">${user.username}</span>
             <span class="role-badge role-${user.role}">${roleLabels[user.role] || user.role}</span>
             <button class="nav-logout-btn" onclick="logout()">Logout</button>

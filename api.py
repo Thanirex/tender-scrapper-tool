@@ -59,15 +59,35 @@ app.include_router(review_router)
 # ── Seed superadmin on first startup ──────────────────────────────────────
 
 def _seed_superadmin():
-    if _db.superadmin_exists():
-        return
-    username = os.getenv("SUPERADMIN_USERNAME", "superadmin")
-    email    = os.getenv("SUPERADMIN_EMAIL",    "admin@taiq.local")
-    password = os.getenv("SUPERADMIN_PASSWORD", "changeme123")
-    _db.create_user(username, email, hash_password(password), "superadmin")
-    print(f"[TAiQ] Superadmin seeded — username: '{username}'")
-    if password == "changeme123":
-        print("[TAiQ] WARNING: using default password. Set SUPERADMIN_PASSWORD in .env")
+    cnk_pass  = os.getenv("SUPERADMIN_CNK_PASSWORD", os.getenv("SUPERADMIN_PASSWORD", "Cnkonline@2026"))
+    tmi_pass  = os.getenv("SUPERADMIN_TMI_PASSWORD", "Tmionline@2026")
+    cnk_hash  = hash_password(cnk_pass)
+    tmi_hash  = hash_password(tmi_pass)
+
+    # Seed or update CNK Super Admin ('superadmin' and 'superadmin_cnk')
+    for u_name, u_email in [("superadmin_cnk", "admin@cnk.local"), ("superadmin", "admin@yourorg.com")]:
+        existing = _db.get_user_by_username(u_name)
+        if not existing:
+            _db.create_user(u_name, u_email, cnk_hash, "superadmin", team_id="cnk", team_name="CNK")
+            print(f"[TAiQ] Seeded '{u_name}'")
+        else:
+            with _db._connect() as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash=?, team_id='cnk', team_name='CNK' WHERE username=?",
+                    (cnk_hash, u_name)
+                )
+
+    # Seed or update TMI Super Admin ('superadmin_tmi')
+    existing_tmi = _db.get_user_by_username("superadmin_tmi")
+    if not existing_tmi:
+        _db.create_user("superadmin_tmi", "admin@tmi.local", tmi_hash, "superadmin", team_id="tmi", team_name="TMI")
+        print(f"[TAiQ] Seeded 'superadmin_tmi'")
+    else:
+        with _db._connect() as conn:
+            conn.execute(
+                "UPDATE users SET password_hash=?, team_id='tmi', team_name='TMI' WHERE username='superadmin_tmi'",
+                (tmi_hash,)
+            )
 
 _seed_superadmin()
 
@@ -118,13 +138,32 @@ async def health():
 
 
 @app.get("/config")
-async def get_config():
-    with open(APP_DIR / "sites_config.json", "r") as f:
-        sites = json.load(f)
+async def get_config(request: Request, team_id: Optional[str] = Query(default=None)):
+    if not team_id:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            try:
+                user = decode_token(auth_header.split(" ")[1])
+                team_id = user.get("team_id", "cnk")
+            except Exception:
+                team_id = "cnk"
+        else:
+            team_id = "cnk"
+
+    team_id = (team_id or "cnk").lower().strip()
+    cfg_dir = APP_DIR / "configs" / "teams" / team_id
+    sites_file = cfg_dir / "sites_config.json" if (cfg_dir / "sites_config.json").exists() else APP_DIR / "sites_config.json"
+    kw_file = cfg_dir / "Keywords.json" if (cfg_dir / "Keywords.json").exists() else APP_DIR / "Keywords.json"
+
     try:
-        with open(APP_DIR / "Keywords.json", "r") as f:
+        with open(sites_file, "r") as f:
+            sites = json.load(f)
+    except Exception:
+        sites = {}
+    try:
+        with open(kw_file, "r") as f:
             keywords = json.load(f)
-    except FileNotFoundError:
+    except Exception:
         keywords = {}
     return {"sites": list(sites.keys()), "keywords": keywords}
 
@@ -1345,6 +1384,7 @@ async def websocket_endpoint(
             return
         user_id  = int(user["sub"])
         username = user.get("username", "")
+        team_id  = user.get("team_id", "cnk")
     except Exception:
         await websocket.send_json({"type": "error", "message": "Invalid token"})
         await websocket.close()
@@ -1381,7 +1421,7 @@ async def websocket_endpoint(
             _send_progress()
 
         # Create session and track tenders per keyword
-        session_id     = _db.create_session(user_id, site_key)
+        session_id     = _db.create_session(user_id, site_key, team_id=team_id)
         keyword_counts: dict[str, int] = {}
 
         def result_cb(record):
@@ -1409,6 +1449,7 @@ async def websocket_endpoint(
                 record.get("site", site_key),
                 summary=record.get("fields"),
                 tender_dir=tender_dir_rel,
+                team_id=team_id,
             )
             _db.upsert_session_keyword(session_id, kw, keyword_counts[kw])
 

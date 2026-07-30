@@ -31,10 +31,13 @@ async def create_user(
     if body.role not in allowed:
         raise HTTPException(status_code=403, detail=f"Cannot create a '{body.role}' account")
     db = _db(request)
+    team_id = body.team_id or current_user.get("team_id") or "cnk"
+    team_name = body.team_name or current_user.get("team_name") or team_id.upper()
     try:
         uid = db.create_user(
             body.username, body.email, hash_password(body.password),
             body.role, int(current_user["sub"]),
+            team_id=team_id, team_name=team_name,
         )
     except Exception:
         raise HTTPException(status_code=400, detail="Username or email already exists")

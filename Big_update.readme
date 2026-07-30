@@ -1,0 +1,119 @@
+# BIG UPDATE ROADMAP — TAiQ Multi-Tenant & High-Scale Architecture Upgrade
+
+This document serves as the master execution checklist and architectural guide for upgrading **TAiQ** from a single-tenant scraper into an **Enterprise Multi-Tenant Procurement Intelligence Platform** supporting **CNK** and **TMI** teams, 100s of websites, 20–40+ custom scraper agents, and a clean modular codebase structure.
+
+---
+
+## 📌 Executive Summary of Planned Capabilities
+
+1. **Multi-Tenancy & Data Isolation (CNK & TMI Teams):**
+   - **`global_superadmin`**: Full system control (manages teams, creates team superadmins, system diagnostic logs).
+   - **`superadmin_tmi` (Team Super Admin for TMI)**: Full administrative power **strictly for TMI** (manages TMI users, TMI websites/keywords, triggers TMI scrapes, halts TMI jobs, views TMI audit logs). Zero access to CNK data.
+   - **`superadmin_cnk`**: Full administrative power strictly for CNK.
+   - **`admin` & `user` (Team Scoped)**: Access restricted strictly to their assigned team's scraped tenders and search sessions.
+
+2. **High-Scale Scraper Architecture (100s of Websites & 20–40+ Agents):**Clean-Line 2D Vector Animation icon illustration, tightly centered composition for a small badge/icon slot, no outer border baked in.
+
+Head-and-shoulders portrait of an Indian woman in a purple saree, bindi and earrings visible, with a thermometer held in her mouth and a mildly distressed, unwell expression, sweat drop on her forehead. Above her head, small red wavy heat-shimmer lines indicating fever.
+
+Style: clean uniform black outlines, flat saturated colors, hard two-tone cell shading, zero texture, all elements bold and legible at small badge size. No AI-slop artifacts.
+   - **Tier 1 (Config-Driven Sites - 90%+ of portals)**: Added via JSON selectors without writing Python code.
+   - **Tier 2 (Custom Site Agent Plugin System)**: Specialized Python agents in `app/agents/custom/` for complex portals (auth, dynamic JS, ZIP extraction).
+   - **Dynamic Plugin Registry (`app/agents/registry.py`)**: AutomaticaClean-Line 2D Vector Animation icon illustration, tightly centered composition for a small badge/icon slot, no outer border baked in.
+Clean-Line 2D Vector Animation icon illustration, tightly centered composition for a small badge/icon slot, no outer border baked in.
+
+Head-and-shoulders portrait of an Indian woman in a purple saree, bindi and earrings visible, with a thermometer held in her mouth and a mildly distressed, unwell expression, sweat drop on her forehead. Above her head, small red wavy heat-shimmer lines indicating fever.
+
+Style: clean uniform black outlines, flat saturated colors, hard two-tone cell shading, zero texture, all elements bold and legible at small badge size. No AI-slop artifacts.
+Head-and-shoulders portrait of an Indian woman in a purple saree, bindi and earrings visible, with a thermometer held in her mouth and a mildly distressed, unwell expression, sweat drop on her forehead. Above her head, small red wavy heat-shimmer lines indicating fever.
+
+Style: clean uniform black outlines, flat saturated colors, hard two-tone cell shading, zero texture, all elements bold and legible at small badge size. No AI-slop artifacts.lly routes site scraping requests to custom agents or generic config scrapers.
+   - **Async Scraper Worker Pool (`app/services/scraper_pool.py`)**: Runs concurrent Playwright browser workers (5–10 parallel tasks) safely without crashing server memory.
+
+3. **Codebase Restructuring (`app/` package):**
+   - Reorganizing loose root files (~25 files) into a clean, modern Python application package.
+
+---
+
+## 🛠️ Step-by-Step Execution Plan
+
+### Phase 1: Codebase Package Restructuring
+- [ ] Create `app/` directory package structure:
+  - `app/main.py` (migrated from `api.py`)
+  - `app/core/` (`config.py`, `security.py` [from `auth.py`], `date_utils.py`, `paths.py`)
+  - `app/db/` (`connection.py` [from `db.py`], `schema.sql`, `schema_mysql.sql`, `repositories/`)
+  - `app/models/` (Pydantic schemas)
+  - `app/routers/` (`auth_router.py`, `admin_router.py`, `superadmin_router.py`, `dashboard_router.py`, `review_router.py`, `taiq_router.py`)
+  - `app/services/` (`scheduler_service.py` [from `cron_runner.py`], `scraper_pool.py`, `keyword_utils.py`, `run_stats.py`)
+  - `app/agents/` (`registry.py`, `generic_agent.py`, `custom/`, `file_reader.py`, `summarizer_agent.py`, `excel_writer.py`)
+- [ ] Update all internal `import` references cleanly across Python modules.
+- [ ] Verify server starts cleanly with `python -m uvicorn app.main:app`.
+
+---
+
+### Phase 2: Database Schema & Migration
+- [ ] Create `teams` table (`id`, `slug` ['cnk', 'tmi'], `display_name`, `created_at`, `is_active`).
+- [ ] Add `team_id` column to existing database tables:
+  - `users` (`team_id VARCHAR(50)`)
+  - `search_sessions` & `found_tenders` (`team_id VARCHAR(50)`)
+  - `cron_runs` & `cron_tenders` (`team_id VARCHAR(50)`)
+  - `cron_dedup` & `downloaded_tenders` (`team_id VARCHAR(50)`)
+  - `activity_logs` (`team_id VARCHAR(50)`)
+- [ ] Write migration script `migrate_teams.py`:
+  - Seeds `cnk` and `tmi` teams into `teams` table.
+  - Backfills existing users and tenders with `team_id = 'cnk'` so zero data is lost.
+  - Sets global superadmin with `team_id = NULL`.
+
+---
+
+### Phase 3: Multi-Tenant RBAC & Query Isolation
+- [ ] Update JWT token payload (`app/core/security.py`):
+  - Include `team_id` and `role` in signed token.
+- [ ] Update RBAC Middleware & Security Dependencies:
+  - Add `require_team_access` check.
+  - Global superadmin bypasses team filter; team superadmins/admins/users are strictly bound to their `team_id`.
+- [ ] Update DB Repository Query Methods (`app/db/repositories/`):
+  - Enforce `WHERE team_id = :team_id` filter across stats, search sessions, tenders, cron history, and activity logs.
+- [ ] Update User Management Endpoint (`admin_router.py`):
+  - Allow `superadmin_tmi` to create `admin` and `user` accounts with `team_id = 'tmi'`.
+
+---
+
+### Phase 4: Multi-Team Config Isolation
+- [ ] Restructure configuration directory:
+  - `configs/teams/cnk/sites_config.json`, `Keywords.json`, `negative_keywords.json`
+  - `configs/teams/tmi/sites_config.json`, `Keywords.json`, `negative_keywords.json`
+- [ ] Create helper `get_team_config(team_id, config_name)` to dynamically load team-specific websites and keywords.
+
+---
+
+### Phase 5: High-Scale Scraper Plugin Registry & Concurrency Pool
+- [ ] Create Abstract Base Class `BaseAgent` (`app/agents/base_agent.py`).
+- [ ] Refactor `ScraperAgent` into `GenericScraperAgent` (`app/agents/generic_agent.py`) for Tier 1 JSON-driven sites.
+- [ ] Create Plugin Registry `PluginRegistry` (`app/agents/registry.py`):
+  - Scans `app/agents/custom/` directory for custom site agent plugins (Tier 2).
+  - Routes site scraping requests to custom agents (e.g. `ungm_agent.py`, `eprocure_agent.py`) if present, or falls back to generic agent.
+- [ ] Create Async Scraper Pool (`app/services/scraper_pool.py`):
+  - Concurrency queue limiting parallel Playwright browser instances (e.g. max 5–10 concurrent workers).
+  - Handles per-domain rate limiting and automatic retries.
+
+---
+
+### Phase 6: Scheduler & Worker Multi-Team Sweeps
+- [ ] Update `scheduler_service.py`:
+  - Daily job iterates through active teams (`cnk`, `tmi`).
+  - Loads team-specific sites & keywords.
+  - Spawns background worker thread per team and saves results tagged with `team_id`.
+  - Generates team-branded Level-1 Excel reports into `outputs/<team_id>/`.
+
+---
+
+### Phase 7: Verification & Testing
+- [ ] **Auth & RBAC Test**: Log in as `superadmin_tmi`, create a TMI user, and confirm CNK data is completely invisible.
+- [ ] **Scraper Test**: Trigger TMI manual scrape with TMI websites/keywords and verify results save cleanly under TMI team.
+- [ ] **Scheduler Test**: Run daily sweep and verify isolated cron runs and Excel reports for CNK and TMI.
+- [ ] **Plugin Test**: Test custom plugin resolution in `app/agents/custom/`.
+
+---
+
+> **Note:** Existing codebase logic remains intact. When executing this upgrade, work will follow this checklist step-by-step.

@@ -14,6 +14,7 @@ _scheduler      = None
 _db             = None
 _stop_event     = threading.Event()
 _current_run_id: "int | None" = None
+_current_team_id: "str | None" = None
 _stats          = None   # run_stats.RunStatsCollector for the active run
 
 # ── Per-run log buffer ─────────────────────────────────────────────────────
@@ -43,6 +44,10 @@ def _check_stop():
 
 def get_current_run_id() -> "int | None":
     return _current_run_id
+
+
+def get_current_team_id() -> "str | None":
+    return _current_team_id
 
 
 def get_log_buffer() -> list:
@@ -123,10 +128,13 @@ def _finalize_stats() -> "str | None":
 
 # ── Keyword loading ────────────────────────────────────────────────────────
 
-def _load_all_keywords() -> list:
+def _load_all_keywords(team_id: str = "cnk") -> list:
     from paths import APP_DIR
+    kw_file = APP_DIR / "configs" / "teams" / team_id / "Keywords.json"
+    if not kw_file.exists():
+        kw_file = APP_DIR / "Keywords.json"
     try:
-        with open(APP_DIR / "Keywords.json", "r") as f:
+        with open(kw_file, "r") as f:
             kw_data = json.load(f)
         seen: set = set()
         keywords: list = []
@@ -137,15 +145,15 @@ def _load_all_keywords() -> list:
                     keywords.append(kw)
         return keywords
     except Exception as e:
-        logger.error(f"[TAiQ Cron] Failed to load Keywords.json: {e}")
+        logger.error(f"[TAiQ Cron] Failed to load keywords for {team_id}: {e}")
         return []
 
 
 # ── Main job ───────────────────────────────────────────────────────────────
 
-def run_daily_job():
-    """Daily TAiQ cron — scrapes ALL configured sites for all keywords at 7am IST."""
-    global _current_run_id, _stats
+def run_daily_job(team_id: str = "cnk"):
+    """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team."""
+    global _current_run_id, _current_team_id, _stats
 
     from paths import DOWNLOADS_DIR, APP_DIR
     from db import CronDBProxy
@@ -164,26 +172,30 @@ def run_daily_job():
         logger.error("[TAiQ Cron] UNGM_EMAIL or UNGM_PASSWORD not set — job aborted.")
         return
 
-    keywords = _load_all_keywords()
+    keywords = _load_all_keywords(team_id)
     if not keywords:
-        logger.error("[TAiQ Cron] No keywords found — job aborted.")
+        logger.error(f"[TAiQ Cron] No keywords found for team {team_id} — job aborted.")
         return
 
-    # Discover standard (non-auth) sites from sites_config.json
+    # Discover standard (non-auth) sites from team sites_config.json
     standard_sites: list = []
+    cfg_file = APP_DIR / "configs" / "teams" / team_id / "sites_config.json"
+    if not cfg_file.exists():
+        cfg_file = APP_DIR / "sites_config.json"
     try:
-        with open(APP_DIR / "sites_config.json", "r") as f:
+        with open(cfg_file, "r") as f:
             sites_cfg = json.load(f)
         standard_sites = [k for k, v in sites_cfg.items() if not v.get("requires_auth")]
     except Exception as cfg_err:
-        logger.warning(f"[TAiQ Cron] Could not load sites_config.json: {cfg_err}")
+        logger.warning(f"[TAiQ Cron] Could not load sites_config for team {team_id}: {cfg_err}")
 
     num_sites   = 1 + len(standard_sites)          # 1 = UNGM + rest
     total_kw    = len(keywords) * num_sites
     site_labels = ["UNGM"] + [s.upper() for s in standard_sites]
 
-    run_id          = _db.create_cron_run(total_keywords=total_kw)
+    run_id          = _db.create_cron_run(total_keywords=total_kw, team_id=team_id)
     _current_run_id = run_id
+    _current_team_id = team_id
 
     from run_stats import RunStatsCollector
     _stats = RunStatsCollector()
@@ -192,15 +204,15 @@ def run_daily_job():
     _db.update_cron_run(run_id, log_file=_log_file_path)
 
     _write_log(
-        f"Run #{run_id} started — {len(keywords)} keywords × {num_sites} site(s): "
+        f"Run #{run_id} started ({team_id.upper()}) — {len(keywords)} keywords × {num_sites} site(s): "
         f"{', '.join(site_labels)}"
     )
-    logger.info(f"[TAiQ Cron] Run #{run_id} started — {total_kw} keyword/site combinations")
+    logger.info(f"[TAiQ Cron] Run #{run_id} ({team_id}) started — {total_kw} keyword/site combinations")
 
     proxy      = CronDBProxy(_db, run_id)
     summarizer = SummarizerAgent()
     timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
-    run_dir    = DOWNLOADS_DIR / "cron" / f"cron_{timestamp}"
+    run_dir    = DOWNLOADS_DIR / "cron" / f"cron_{team_id}_{timestamp}"
 
     total_tenders = 0
     keywords_done = 0
@@ -321,7 +333,7 @@ def run_daily_job():
                 run_id=run_id, keyword=res["keyword"], title=title,
                 url=res.get("url", ""), site="ungm",
                 published_date=res.get("deadline", ""), summary=fields,
-                tender_dir=tender_dir_rel,
+                tender_dir=tender_dir_rel, team_id=team_id,
             )
             total_tenders += 1
             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -437,7 +449,7 @@ def run_daily_job():
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date="", summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1324,8 +1336,9 @@ def run_daily_job():
         )
 
     finally:
-        _current_run_id = None
-        _stats          = None
+        _current_run_id  = None
+        _current_team_id = None
+        _stats           = None
         _stop_event.clear()
         _clear_log()
 
@@ -1342,25 +1355,23 @@ def _check_and_fire_if_needed():
     if stale_count:
         logger.info(f"[TAiQ Cron] Startup: marked {stale_count} stale run(s) as failed")
 
+    # CNK catch-up check: past 7:00 AM IST and CNK has not run today
     if now_ist.hour >= 7:
-        existing = _db.get_cron_run_by_date(today_str)
-        if not existing:
-            logger.info(
-                "[TAiQ Cron] Catch-up: past 7am IST with no run today — firing now"
-            )
+        cnk_run = _db.get_cron_run_by_date(today_str, team_id="cnk")
+        if not cnk_run:
+            logger.info("[TAiQ Cron] Catch-up: past 7am IST with no CNK run today — firing CNK job")
             threading.Thread(
-                target=run_daily_job, daemon=True, name="taiq-catchup"
+                target=run_daily_job, args=("cnk",), daemon=True, name="taiq-catchup-cnk"
             ).start()
-        else:
-            logger.info(
-                f"[TAiQ Cron] Startup: today's run exists "
-                f"(id={existing['id']}, status={existing['status']}) — skipping"
-            )
-    else:
-        logger.info(
-            f"[TAiQ Cron] Startup: before 7am IST ({now_ist.strftime('%H:%M')}) — "
-            "no catch-up needed"
-        )
+
+    # TMI catch-up check: past 9:00 PM IST (21:00) and TMI has not run today
+    if now_ist.hour >= 21:
+        tmi_run = _db.get_cron_run_by_date(today_str, team_id="tmi")
+        if not tmi_run and _current_run_id is None:
+            logger.info("[TAiQ Cron] Catch-up: past 9pm IST with no TMI run today — firing TMI job")
+            threading.Thread(
+                target=run_daily_job, args=("tmi",), daemon=True, name="taiq-catchup-tmi"
+            ).start()
 
 
 # ── Scheduler init ─────────────────────────────────────────────────────────
@@ -1375,16 +1386,31 @@ def init_scheduler(db):
     IST = pytz.timezone("Asia/Kolkata")
 
     _scheduler = BackgroundScheduler(timezone=IST)
+
+    # 1) CNK Daily Scrape at 07:00 AM IST
     _scheduler.add_job(
         run_daily_job,
         trigger=CronTrigger(hour=7, minute=0, timezone=IST),
-        id="daily_taiq_job",
-        name="TAiQ Daily Scrape",
+        args=["cnk"],
+        id="daily_taiq_job_cnk",
+        name="TAiQ CNK Daily Scrape (07:00 AM IST)",
         replace_existing=True,
         misfire_grace_time=3600,
     )
+
+    # 2) TMI Daily Scrape at 09:00 PM IST (21:00)
+    _scheduler.add_job(
+        run_daily_job,
+        trigger=CronTrigger(hour=21, minute=0, timezone=IST),
+        args=["tmi"],
+        id="daily_taiq_job_tmi",
+        name="TAiQ TMI Daily Scrape (09:00 PM IST)",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
     _scheduler.start()
-    logger.info("[TAiQ Cron] Scheduler started — daily job fires at 07:00 IST")
+    logger.info("[TAiQ Cron] Scheduler started — CNK job at 07:00 IST & TMI job at 21:00 IST")
 
     threading.Thread(
         target=_check_and_fire_if_needed, daemon=True, name="taiq-startup-check"

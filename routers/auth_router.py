@@ -18,7 +18,9 @@ async def login(body: LoginRequest, request: Request):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user["is_active"]:
         raise HTTPException(status_code=403, detail="Account is deactivated")
-    token = create_access_token(user["id"], user["username"], user["role"])
+    team_id = user.get("team_id") or "cnk"
+    team_name = user.get("team_name") or team_id.upper()
+    token = create_access_token(user["id"], user["username"], user["role"], team_id=team_id, team_name=team_name)
     db.log_activity(
         user["id"], user["username"], "login",
         ip_address=request.client.host if request.client else None,
@@ -26,7 +28,13 @@ async def login(body: LoginRequest, request: Request):
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": {"id": user["id"], "username": user["username"], "role": user["role"]},
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+            "team_id": team_id,
+            "team_name": team_name,
+        },
     }
 
 

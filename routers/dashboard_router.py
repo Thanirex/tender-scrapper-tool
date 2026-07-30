@@ -23,7 +23,8 @@ async def get_stats(
     date: str = Query(default=None),
     current_user: dict = _auth,
 ):
-    return _db(request).get_stats_for_date(date or _today())
+    team_id = current_user.get("team_id", "cnk")
+    return _db(request).get_stats_for_date(date or _today(), team_id=team_id)
 
 
 @router.get("/report")
@@ -33,7 +34,8 @@ async def get_report(
     current_user: dict = _auth,
 ):
     """Rolling report cards for the last N days (default 3, newest first)."""
-    return {"days": _db(request).get_daily_report(days)}
+    team_id = current_user.get("team_id", "cnk")
+    return {"days": _db(request).get_daily_report(days, team_id=team_id)}
 
 
 @router.get("/tenders")
@@ -44,7 +46,8 @@ async def get_tenders(
     keyword: str = Query(default=None),
     current_user: dict = _auth,
 ):
-    return _db(request).get_tenders_for_date(date or _today(), site, keyword)
+    team_id = current_user.get("team_id", "cnk")
+    return _db(request).get_tenders_for_date(date or _today(), site, keyword, team_id=team_id)
 
 
 @router.get("/dates")
@@ -52,4 +55,5 @@ async def get_dates(
     request: Request,
     current_user: dict = _auth,
 ):
-    return _db(request).get_dates_with_data()
+    team_id = current_user.get("team_id", "cnk")
+    return _db(request).get_dates_with_data(team_id=team_id)

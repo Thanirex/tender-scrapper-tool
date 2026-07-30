@@ -22,13 +22,17 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def create_access_token(user_id: int, username: str, role: str) -> str:
+def create_access_token(user_id: int, username: str, role: str, team_id: str = "cnk", team_name: Optional[str] = None) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    return jwt.encode(
-        {"sub": str(user_id), "username": username, "role": role, "exp": expire},
-        SECRET_KEY,
-        algorithm=ALGORITHM,
-    )
+    payload = {
+        "sub": str(user_id),
+        "username": username,
+        "role": role,
+        "team_id": team_id or "cnk",
+        "team_name": team_name or (team_id or "cnk").upper(),
+        "exp": expire,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
 
 def decode_token(token: str) -> dict:

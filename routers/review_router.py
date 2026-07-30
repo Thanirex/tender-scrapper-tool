@@ -68,9 +68,10 @@ async def review_summary(
     month = _valid_month(month)
     if not month:
         return JSONResponse({"error": "month must be YYYY-MM"}, status_code=400)
+    team_id = _user.get("team_id", "cnk")
     db      = request.app.state.db
-    summary = db.get_review_summary(month)
-    return {"month": month, **summary, "months": db.get_review_months(6)}
+    summary = db.get_review_summary(month, team_id=team_id)
+    return {"month": month, **summary, "months": db.get_review_months(6, team_id=team_id)}
 
 
 @router.get("/tenders")
@@ -86,7 +87,8 @@ async def review_tenders(
         return JSONResponse({"error": "month must be YYYY-MM"}, status_code=400)
     if status and status not in ("approved", "rejected", "pending"):
         return JSONResponse({"error": "Invalid status filter"}, status_code=400)
-    tenders = request.app.state.db.get_review_tenders(month, status=status, q=q)
+    team_id = user.get("team_id", "cnk")
+    tenders = request.app.state.db.get_review_tenders(month, status=status, q=q, team_id=team_id)
     tenders = [_redact_tender(user, t) for t in tenders]
     return {"month": month, "tenders": tenders, "total": len(tenders)}
 

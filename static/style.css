@@ -3640,3 +3640,52 @@ a { text-decoration: none; }
     .daily-report-row { grid-template-columns: 1fr; }
     .rrc-headline { gap: 1rem; }
 }
+
+/* ── Multi-Tenant Team Badge Styling ─────────────────────────────────────── */
+.team-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: 9999px;
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    transition: all 0.2s ease;
+}
+
+.team-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+    animation: team-pulse 2s infinite;
+}
+
+@keyframes team-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.team-cnk {
+    background: rgba(14, 165, 233, 0.12);
+    color: #0284c7;
+    border: 1px solid rgba(14, 165, 233, 0.3);
+}
+
+.team-cnk .team-dot {
+    background: #0284c7;
+}
+
+.team-tmi {
+    background: rgba(139, 92, 246, 0.12);
+    color: #7c3aed;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.team-tmi .team-dot {
+    background: #7c3aed;
+}
+

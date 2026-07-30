@@ -406,6 +406,24 @@ class TenderDB:
             self._idx(conn, False, "idx_cron_dedup_title", "cron_dedup", "title_norm")
             self._url_idx(conn, "idx_cron_dedup_url", "cron_dedup")
 
+            # ── Teams table ────────────────────────────────────────────────
+            conn.execute(f"""
+                CREATE TABLE IF NOT EXISTS teams (
+                    id          {_PK},
+                    slug        {_ENUM_TEXT} NOT NULL UNIQUE,
+                    name        TEXT NOT NULL,
+                    created_at  TEXT NOT NULL,
+                    is_active   INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            conn.execute(_insert_ignore("teams", "slug, name, created_at", "?, ?, ?"), ("cnk", "CNK", "2026-01-01"))
+            conn.execute(_insert_ignore("teams", "slug, name, created_at", "?, ?, ?"), ("tmi", "TMI", "2026-01-01"))
+
+            # ── Auto-migrate team_id column onto all primary tables ────────
+            for _tbl in ("users", "search_sessions", "found_tenders", "cron_runs", "cron_tenders", "activity_logs"):
+                self._add_col(conn, _tbl, "team_id", f"{_ENUM_TEXT} DEFAULT 'cnk'")
+            self._add_col(conn, "users", "team_name", "TEXT DEFAULT 'CNK'")
+
             # ── Tender review / feedback ───────────────────────────────────
             # review_status: 'pending' | 'approved' | 'rejected'
             # MySQL cannot put a DEFAULT on TEXT columns, so use VARCHAR there.
@@ -463,14 +481,14 @@ class TenderDB:
     # ── User management ────────────────────────────────────────────────────────
 
     def create_user(self, username: str, email: str, password_hash: str,
-                    role: str, created_by: int = None) -> int:
+                    role: str, created_by: int = None, team_id: str = "cnk", team_name: str = "CNK") -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO users
-                   (username, email, password_hash, role, created_by, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (username, email, password_hash, role, created_by, now),
+                   (username, email, password_hash, role, created_by, created_at, team_id, team_name)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (username, email, password_hash, role, created_by, now, team_id or "cnk", team_name or "CNK"),
             )
             return cur.lastrowid
 
@@ -490,11 +508,11 @@ class TenderDB:
         with self._connect() as conn:
             if requester_role == "superadmin":
                 return conn.execute(
-                    """SELECT id, username, email, role, created_at, is_active, created_by
+                    """SELECT id, username, email, role, team_id, team_name, created_at, is_active, created_by
                        FROM users ORDER BY created_at DESC"""
                 ).fetchall()
             return conn.execute(
-                """SELECT id, username, email, role, created_at, is_active, created_by
+                """SELECT id, username, email, role, team_id, team_name, created_at, is_active, created_by
                    FROM users
                    WHERE created_by = ? OR id = ?
                    ORDER BY created_at DESC""",
@@ -519,14 +537,14 @@ class TenderDB:
 
     # ── Search sessions ────────────────────────────────────────────────────────
 
-    def create_session(self, user_id: int, site: str) -> int:
+    def create_session(self, user_id: int, site: str, team_id: str = "cnk") -> int:
         now = now_ist_naive()
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO search_sessions
-                   (user_id, site, run_date, status, created_at)
-                   VALUES (?, ?, ?, 'running', ?)""",
-                (user_id, site, now.strftime("%Y-%m-%d"), now.isoformat(timespec="seconds")),
+                   (user_id, site, run_date, status, created_at, team_id)
+                   VALUES (?, ?, ?, 'running', ?, ?)""",
+                (user_id, site, now.strftime("%Y-%m-%d"), now.isoformat(timespec="seconds"), team_id or "cnk"),
             )
             return cur.lastrowid
 
@@ -564,52 +582,58 @@ class TenderDB:
 
     def record_found_tender(self, session_id: int, keyword: str, title: str,
                              url: str, site: str, published_date: str = "",
-                             summary: dict = None, tender_dir: str = "") -> int:
+                             summary: dict = None, tender_dir: str = "", team_id: str = "cnk") -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO found_tenders
                    (session_id, keyword, title, url, site, published_date,
-                    summary_json, tender_dir, found_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    summary_json, tender_dir, found_at, team_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
-                 tender_dir or "", now),
+                 tender_dir or "", now, team_id or "cnk"),
             )
             return cur.lastrowid
 
     # ── Dashboard queries ──────────────────────────────────────────────────────
 
-    def get_stats_for_date(self, date_str: str) -> dict:
+    def get_stats_for_date(self, date_str: str, team_id: str = None) -> dict:
         with self._connect() as conn:
-            session_rows = conn.execute(
-                """SELECT s.id, u.username, s.site, s.status, s.zip_filename,
-                          s.created_at,
-                          GROUP_CONCAT(DISTINCT sk.keyword) AS keywords,
-                          COUNT(DISTINCT ft.id)             AS tenders_found
-                   FROM search_sessions s
-                   JOIN users u ON u.id = s.user_id
-                   LEFT JOIN session_keywords sk ON sk.session_id = s.id
-                   LEFT JOIN found_tenders ft ON ft.session_id = s.id
-                   WHERE s.run_date = ?
-                   GROUP BY s.id
-                   ORDER BY s.created_at""",
-                (date_str,),
-            ).fetchall()
+            sess_sql = """SELECT s.id, u.username, s.site, s.status, s.zip_filename,
+                                s.created_at,
+                                GROUP_CONCAT(DISTINCT sk.keyword) AS keywords,
+                                COUNT(DISTINCT ft.id)             AS tenders_found
+                         FROM search_sessions s
+                         JOIN users u ON u.id = s.user_id
+                         LEFT JOIN session_keywords sk ON sk.session_id = s.id
+                         LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                         WHERE s.run_date = ?"""
+            sess_params = [date_str]
+            if team_id:
+                sess_sql += " AND s.team_id = ?"
+                sess_params.append(team_id)
+            sess_sql += " GROUP BY s.id ORDER BY s.created_at"
+            session_rows = conn.execute(sess_sql, sess_params).fetchall()
 
-            by_site_rows = conn.execute(
-                """SELECT s.site, COUNT(DISTINCT ft.id) AS count
-                   FROM search_sessions s
-                   LEFT JOIN found_tenders ft ON ft.session_id = s.id
-                   WHERE s.run_date = ?
-                   GROUP BY s.site""",
-                (date_str,),
-            ).fetchall()
+            site_sql = """SELECT s.site, COUNT(DISTINCT ft.id) AS count
+                          FROM search_sessions s
+                          LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                          WHERE s.run_date = ?"""
+            site_params = [date_str]
+            if team_id:
+                site_sql += " AND s.team_id = ?"
+                site_params.append(team_id)
+            site_sql += " GROUP BY s.site"
+            by_site_rows = conn.execute(site_sql, site_params).fetchall()
 
-            cron_row = conn.execute(
-                "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
-                (date_str,),
-            ).fetchone()
+            cron_sql = "SELECT * FROM cron_runs WHERE run_date = ?"
+            cron_params = [date_str]
+            if team_id:
+                cron_sql += " AND team_id = ?"
+                cron_params.append(team_id)
+            cron_sql += " ORDER BY id DESC LIMIT 1"
+            cron_row = conn.execute(cron_sql, cron_params).fetchone()
 
         sessions = list(session_rows)
         by_site  = list(by_site_rows)
@@ -633,7 +657,7 @@ class TenderDB:
         return {"sessions": sessions, "by_site": by_site}
 
     def get_tenders_for_date(self, date_str: str,
-                              site: str = None, keyword: str = None) -> "list[dict]":
+                              site: str = None, keyword: str = None, team_id: str = None) -> "list[dict]":
         result = []
 
         if site != "taiq":
@@ -643,6 +667,9 @@ class TenderDB:
                             JOIN search_sessions s ON s.id = ft.session_id
                             WHERE s.run_date = ?"""
                 params: list = [date_str]
+                if team_id:
+                    q += " AND s.team_id = ?"
+                    params.append(team_id)
                 if site:
                     q += " AND s.site = ?"
                     params.append(site)
@@ -659,11 +686,14 @@ class TenderDB:
                 result.append(r)
 
         if not site or site == "taiq":
-            cron_run = self.get_cron_run_by_date(date_str)
+            cron_run = self.get_cron_run_by_date(date_str, team_id=team_id)
             if cron_run:
                 with self._connect() as conn:
                     q      = "SELECT * FROM cron_tenders WHERE run_id = ?"
                     params = [cron_run["id"]]
+                    if team_id:
+                        q += " AND team_id = ?"
+                        params.append(team_id)
                     if keyword:
                         q += " AND keyword LIKE ?"
                         params.append(f"%{keyword}%")
@@ -680,23 +710,29 @@ class TenderDB:
         result.sort(key=lambda x: x.get("found_at", ""), reverse=True)
         return result
 
-    def get_dates_with_data(self) -> "list[str]":
+    def get_dates_with_data(self, team_id: str = None) -> "list[str]":
         with self._connect() as conn:
-            manual_rows = conn.execute(
-                """SELECT DISTINCT run_date FROM search_sessions
-                   WHERE status = 'complete'
-                   ORDER BY run_date DESC LIMIT 90"""
-            ).fetchall()
-            cron_rows = conn.execute(
-                """SELECT DISTINCT run_date FROM cron_runs
-                   WHERE status IN ('complete', 'stopped', 'failed')
-                   ORDER BY run_date DESC LIMIT 90"""
-            ).fetchall()
+            m_sql = "SELECT DISTINCT run_date FROM search_sessions WHERE status = 'complete'"
+            m_params = []
+            if team_id:
+                m_sql += " AND team_id = ?"
+                m_params.append(team_id)
+            m_sql += " ORDER BY run_date DESC LIMIT 90"
+
+            c_sql = "SELECT DISTINCT run_date FROM cron_runs WHERE status IN ('complete', 'stopped', 'failed')"
+            c_params = []
+            if team_id:
+                c_sql += " AND team_id = ?"
+                c_params.append(team_id)
+            c_sql += " ORDER BY run_date DESC LIMIT 90"
+
+            manual_rows = conn.execute(m_sql, m_params).fetchall()
+            cron_rows   = conn.execute(c_sql, c_params).fetchall()
         manual_dates = {r["run_date"] for r in manual_rows}
         cron_dates   = {r["run_date"] for r in cron_rows}
         return sorted(manual_dates | cron_dates, reverse=True)[:90]
 
-    def get_daily_report(self, days: int = 3) -> "list[dict]":
+    def get_daily_report(self, days: int = 3, team_id: str = None) -> "list[dict]":
         """Report cards for the last `days` IST days, newest first.
 
         Per day: tenders scraped (TAiQ vs manual split), site coverage
@@ -713,10 +749,14 @@ class TenderDB:
                 like = f"{d}%"
 
                 # ── TAiQ run of the day ────────────────────────────────────
-                cron_row = conn.execute(
-                    "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
-                    (d,),
-                ).fetchone()
+                c_sql = "SELECT * FROM cron_runs WHERE run_date = ?"
+                c_params = [d]
+                if team_id:
+                    c_sql += " AND team_id = ?"
+                    c_params.append(team_id)
+                c_sql += " ORDER BY id DESC LIMIT 1"
+                cron_row = conn.execute(c_sql, c_params).fetchone()
+
                 taiq_count    = (cron_row["total_tenders"] or 0) if cron_row else 0
                 scanned: set  = set()
                 produced: set = set()
@@ -733,21 +773,27 @@ class TenderDB:
                     produced |= {(r["site"] or "").lower() for r in rows if r["site"]}
 
                 # ── Manual sessions of the day ─────────────────────────────
-                manual_count = conn.execute(
-                    """SELECT COUNT(ft.id) AS n
-                       FROM found_tenders ft
-                       JOIN search_sessions s ON s.id = ft.session_id
-                       WHERE s.run_date = ?""",
-                    (d,),
-                ).fetchone()["n"]
-                for r in conn.execute(
-                    """SELECT s.site, COUNT(ft.id) AS n
-                       FROM search_sessions s
-                       LEFT JOIN found_tenders ft ON ft.session_id = s.id
-                       WHERE s.run_date = ?
-                       GROUP BY s.site""",
-                    (d,),
-                ).fetchall():
+                m_sql = """SELECT COUNT(ft.id) AS n
+                           FROM found_tenders ft
+                           JOIN search_sessions s ON s.id = ft.session_id
+                           WHERE s.run_date = ?"""
+                m_params = [d]
+                if team_id:
+                    m_sql += " AND s.team_id = ?"
+                    m_params.append(team_id)
+                manual_count = conn.execute(m_sql, m_params).fetchone()["n"]
+
+                ms_sql = """SELECT s.site, COUNT(ft.id) AS n
+                            FROM search_sessions s
+                            LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                            WHERE s.run_date = ?"""
+                ms_params = [d]
+                if team_id:
+                    ms_sql += " AND s.team_id = ?"
+                    ms_params.append(team_id)
+                ms_sql += " GROUP BY s.site"
+
+                for r in conn.execute(ms_sql, ms_params).fetchall():
                     site = (r["site"] or "").lower()
                     if site:
                         scanned.add(site)
@@ -758,13 +804,15 @@ class TenderDB:
                 # ── Review progress for tenders found that day ─────────────
                 counts = {"approved": 0, "rejected": 0, "pending": 0}
                 for table in self._REVIEW_SOURCES.values():
-                    for r in conn.execute(
-                        f"""SELECT COALESCE(review_status, 'pending') AS st,
-                                   COUNT(*) AS n
-                            FROM {table} WHERE found_at LIKE ?
-                            GROUP BY COALESCE(review_status, 'pending')""",
-                        (like,),
-                    ).fetchall():
+                    rev_sql = f"""SELECT COALESCE(review_status, 'pending') AS st,
+                                        COUNT(*) AS n
+                                 FROM {table} WHERE found_at LIKE ?"""
+                    rev_params = [like]
+                    if team_id:
+                        rev_sql += " AND team_id = ?"
+                        rev_params.append(team_id)
+                    rev_sql += " GROUP BY COALESCE(review_status, 'pending')"
+                    for r in conn.execute(rev_sql, rev_params).fetchall():
                         counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
                 decided = counts["approved"] + counts["rejected"]
 
@@ -820,15 +868,15 @@ class TenderDB:
 
     # ── TAiQ cron ──────────────────────────────────────────────────────────────
 
-    def create_cron_run(self, total_keywords: int = 0) -> int:
+    def create_cron_run(self, total_keywords: int = 0, team_id: str = "cnk") -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
         run_date = now_ist_naive().strftime("%Y-%m-%d")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO cron_runs
-                   (run_date, started_at, status, total_keywords)
-                   VALUES (?, ?, 'running', ?)""",
-                (run_date, now, total_keywords),
+                   (run_date, started_at, status, total_keywords, team_id)
+                   VALUES (?, ?, 'running', ?, ?)""",
+                (run_date, now, total_keywords, team_id or "cnk"),
             )
             return cur.lastrowid
 
@@ -846,17 +894,17 @@ class TenderDB:
 
     def record_cron_tender(self, run_id: int, keyword: str, title: str,
                             url: str, site: str, published_date: str = "",
-                            summary: dict = None, tender_dir: str = "") -> int:
+                            summary: dict = None, tender_dir: str = "", team_id: str = "cnk") -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
             cur = conn.execute(
                 """INSERT INTO cron_tenders
                    (run_id, keyword, title, url, site, published_date,
-                    summary_json, tender_dir, found_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    summary_json, tender_dir, found_at, team_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (run_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
-                 tender_dir or "", now),
+                 tender_dir or "", now, team_id or "cnk"),
             )
             return cur.lastrowid
 
@@ -893,17 +941,24 @@ class TenderDB:
                 "SELECT * FROM cron_runs WHERE id = ?", (run_id,)
             ).fetchone()
 
-    def get_latest_cron_run(self) -> "dict | None":
+    def get_latest_cron_run(self, team_id: str = None) -> "dict | None":
         with self._connect() as conn:
-            return conn.execute(
-                "SELECT * FROM cron_runs ORDER BY id DESC LIMIT 1"
-            ).fetchone()
+            q = "SELECT * FROM cron_runs"
+            params = []
+            if team_id:
+                q += " WHERE team_id = ?"
+                params.append(team_id)
+            q += " ORDER BY id DESC LIMIT 1"
+            return conn.execute(q, params).fetchone()
 
     def get_cron_tenders(self, run_id: int,
-                          site: str = None, keyword: str = None) -> "list[dict]":
+                          site: str = None, keyword: str = None, team_id: str = None) -> "list[dict]":
         with self._connect() as conn:
             q      = "SELECT * FROM cron_tenders WHERE run_id = ?"
             params: list = [run_id]
+            if team_id:
+                q += " AND team_id = ?"
+                params.append(team_id)
             if site:
                 q += " AND site = ?"
                 params.append(site)
@@ -921,11 +976,15 @@ class TenderDB:
             result.append(r)
         return result
 
-    def get_cron_dates(self) -> "list[dict]":
+    def get_cron_dates(self, team_id: str = None) -> "list[dict]":
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT run_date, status FROM cron_runs ORDER BY run_date DESC LIMIT 90"
-            ).fetchall()
+            q = "SELECT run_date, status FROM cron_runs"
+            params = []
+            if team_id:
+                q += " WHERE team_id = ?"
+                params.append(team_id)
+            q += " ORDER BY run_date DESC LIMIT 90"
+            rows = conn.execute(q, params).fetchall()
         seen: dict = {}
         for r in rows:
             d, s = r["run_date"], r["status"]
@@ -933,12 +992,15 @@ class TenderDB:
                 seen[d] = s
         return [{"date": d, "status": s} for d, s in seen.items()]
 
-    def get_cron_run_by_date(self, date_str: str) -> "dict | None":
+    def get_cron_run_by_date(self, date_str: str, team_id: str = None) -> "dict | None":
         with self._connect() as conn:
-            return conn.execute(
-                "SELECT * FROM cron_runs WHERE run_date = ? ORDER BY id DESC LIMIT 1",
-                (date_str,),
-            ).fetchone()
+            q = "SELECT * FROM cron_runs WHERE run_date = ?"
+            params = [date_str]
+            if team_id:
+                q += " AND team_id = ?"
+                params.append(team_id)
+            q += " ORDER BY id DESC LIMIT 1"
+            return conn.execute(q, params).fetchone()
 
     def mark_stale_runs_failed(self) -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
@@ -1031,29 +1093,34 @@ class TenderDB:
                 (source, tender_id),
             ).fetchall()
 
-    def get_review_summary(self, month: str) -> dict:
+    def get_review_summary(self, month: str, team_id: str = None) -> dict:
         """Counts + review metrics for one IST month ('YYYY-MM')."""
         like   = f"{month}%"
         counts = {"approved": 0, "rejected": 0, "pending": 0}
         review_spans: list = []   # (found_at, reviewed_at) of decided tenders
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
-                rows = conn.execute(
-                    f"""SELECT COALESCE(review_status, 'pending') AS st,
+                q = f"""SELECT COALESCE(review_status, 'pending') AS st,
                                COUNT(*) AS n
-                        FROM {table} WHERE found_at LIKE ?
-                        GROUP BY COALESCE(review_status, 'pending')""",
-                    (like,),
-                ).fetchall()
+                        FROM {table} WHERE found_at LIKE ?"""
+                params = [like]
+                if team_id:
+                    q += " AND team_id = ?"
+                    params.append(team_id)
+                q += " GROUP BY COALESCE(review_status, 'pending')"
+                rows = conn.execute(q, params).fetchall()
                 for r in rows:
                     counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
-                review_spans += conn.execute(
-                    f"""SELECT found_at, reviewed_at FROM {table}
-                        WHERE found_at LIKE ?
-                          AND COALESCE(review_status, 'pending') != 'pending'
-                          AND reviewed_at IS NOT NULL""",
-                    (like,),
-                ).fetchall()
+
+                sq = f"""SELECT found_at, reviewed_at FROM {table}
+                         WHERE found_at LIKE ?
+                           AND COALESCE(review_status, 'pending') != 'pending'
+                           AND reviewed_at IS NOT NULL"""
+                sparams = [like]
+                if team_id:
+                    sq += " AND team_id = ?"
+                    sparams.append(team_id)
+                review_spans += conn.execute(sq, sparams).fetchall()
 
         counts["scraped"] = counts["approved"] + counts["rejected"] + counts["pending"]
 
@@ -1075,19 +1142,21 @@ class TenderDB:
         counts["avg_review_hours"] = round(sum(hours) / len(hours), 1) if hours else None
         return counts
 
-    def get_review_months(self, limit: int = 6) -> "list[dict]":
+    def get_review_months(self, limit: int = 6, team_id: str = None) -> "list[dict]":
         """Per-month counts for the trend chart, oldest → newest."""
         buckets: dict = {}
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
-                rows = conn.execute(
-                    f"""SELECT SUBSTR(found_at, 1, 7) AS m,
+                q = f"""SELECT SUBSTR(found_at, 1, 7) AS m,
                                COALESCE(review_status, 'pending') AS st,
                                COUNT(*) AS n
-                        FROM {table}
-                        GROUP BY SUBSTR(found_at, 1, 7),
-                                 COALESCE(review_status, 'pending')"""
-                ).fetchall()
+                        FROM {table}"""
+                params = []
+                if team_id:
+                    q += " WHERE team_id = ?"
+                    params.append(team_id)
+                q += " GROUP BY SUBSTR(found_at, 1, 7), COALESCE(review_status, 'pending')"
+                rows = conn.execute(q, params).fetchall()
                 for r in rows:
                     b = buckets.setdefault(
                         r["m"], {"month": r["m"], "approved": 0,
@@ -1100,13 +1169,16 @@ class TenderDB:
         return list(reversed(months))
 
     def get_review_tenders(self, month: str, status: str = None,
-                           q: str = None) -> "list[dict]":
+                           q: str = None, team_id: str = None) -> "list[dict]":
         like   = f"{month}%"
         result = []
         with self._connect() as conn:
             for source, table in self._REVIEW_SOURCES.items():
                 sql    = f"SELECT * FROM {table} WHERE found_at LIKE ?"
                 params: list = [like]
+                if team_id:
+                    sql += " AND team_id = ?"
+                    params.append(team_id)
                 if status:
                     sql += " AND COALESCE(review_status, 'pending') = ?"
                     params.append(status)

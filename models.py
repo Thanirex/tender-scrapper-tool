@@ -12,6 +12,8 @@ class CreateUserRequest(BaseModel):
     email: str
     password: str
     role: str
+    team_id: Optional[str] = "cnk"
+    team_name: Optional[str] = None
 
 
 class UpdateUserRequest(BaseModel):

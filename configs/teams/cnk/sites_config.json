@@ -1,0 +1,132 @@
+{
+    "devnet": {
+        "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
+        "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
+        "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
+        "results_link_selector": "a[id*='lnkJobTitle']",
+        "tender_title_selector": "#ContentPlaceHolder1_JD1_lblJobTitle",
+        "tender_description_selector": "#ContentPlaceHolder1_JD1_tdDesc, #ContentPlaceHolder1_JD1_tdtxtDesc",
+        "skip_date_filter": true
+    },
+    "ungm": {
+        "url": "https://www.ungm.org",
+        "requires_auth": true,
+        "display_name": "UNGM (UN Global Marketplace)"
+    },
+    "nasscom": {
+        "url": "https://www.nasscomfoundation.org/requestproposal",
+        "scraper_type": "nasscom",
+        "skip_date_filter": true
+    },
+    "afdb": {
+        "search_url_template": "https://www.afdb.org/en/projects-and-operations/procurement?title={keyword}",
+        "results_link_selector": ".views-field-title a",
+        "tender_title_selector": "h1.page-header",
+        "tender_description_selector": ".field-name-body",
+        "skip_date_filter": false,
+        "date_selector": ".date-display-single",
+        "requires_stealth": true
+    },
+    "jobinrwanda": {
+        "url": "https://www.jobinrwanda.com/jobs/tender",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobintanzania": {
+        "url": "https://www.jobintanzania.com/jobs/all",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobinuganda": {
+        "url": "https://www.jobinuganda.com/jobs/all",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "jobinkenya": {
+        "url": "https://www.jobinkenya.com/jobs/all",
+        "search_input_selector": "input#edit-filter-titles-field",
+        "search_button_selector": "button#edit-submit-jobs-display",
+        "results_link_selector": "a[href*='/job/']",
+        "tender_title_selector": ".field--name-title",
+        "tender_description_selector": ".field--name-field-job-full-description",
+        "skip_date_filter": true
+    },
+    "au": {
+        "url": "https://au.int/en/bids",
+        "scraper_type": "au",
+        "display_name": "African Union Bids",
+        "skip_date_filter": false
+    },
+    "acbf": {
+        "url": "https://theacbf.org/join-us/procurement-and-consultancies/",
+        "scraper_type": "acbf",
+        "display_name": "ACBF Procurement & Consultancies",
+        "skip_date_filter": true
+    },
+    "trademarkafrica": {
+        "url": "https://trademarkafrica.com/procurement/",
+        "scraper_type": "trademarkafrica",
+        "display_name": "TradeMark Africa Procurement",
+        "skip_date_filter": true
+    },
+    "worldbank": {
+        "url": "https://wbgeprocure-rfxnow.worldbank.org/rfxnow/public/advertisement/index.html",
+        "scraper_type": "worldbank",
+        "display_name": "World Bank Group Procurement",
+        "skip_date_filter": true
+    },
+    "fhi360": {
+        "url": "https://solicitations.fhi360.org/Solicitation.aspx",
+        "scraper_type": "fhi360",
+        "display_name": "FHI 360 Solicitations",
+        "skip_date_filter": true
+    },
+    "gatsbyafrica": {
+        "url": "https://www.gatsbyafrica.org.uk/tender/",
+        "scraper_type": "gatsbyafrica",
+        "display_name": "Gatsby Africa Tenders",
+        "skip_date_filter": true
+    },
+    "afrosai": {
+        "url": "https://afrosai-e.org.za/tenders/",
+        "scraper_type": "afrosai",
+        "display_name": "AFROSAI-E Tenders",
+        "skip_date_filter": true
+    },
+    "drc": {
+        "url": "https://drc.ngo/en/tenders/",
+        "scraper_type": "drc",
+        "display_name": "DRC Tenders",
+        "skip_date_filter": false
+    },
+    "jsi": {
+        "url": "https://www.jsi.org/partner-with-jsi/solicitations/",
+        "scraper_type": "jsi",
+        "display_name": "JSI Solicitations",
+        "skip_date_filter": true
+    },
+    "chai": {
+        "url": "https://www.clintonhealthaccess.org/resource-center/?_sft_category=rfp&sort_order=date+desc",
+        "scraper_type": "chai",
+        "display_name": "Clinton Health Access Initiative (RFPs)",
+        "skip_date_filter": false
+    },
+    "reliefweb": {
+        "url": "https://reliefweb.int/jobs",
+        "scraper_type": "reliefweb",
+        "display_name": "ReliefWeb Jobs",
+        "skip_date_filter": false
+    }
+}

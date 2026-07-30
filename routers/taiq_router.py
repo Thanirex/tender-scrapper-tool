@@ -19,7 +19,8 @@ async def taiq_status(
     request: Request,
     _user: dict = _auth,
 ):
-    run = request.app.state.db.get_latest_cron_run()
+    team_id = _user.get("team_id", "cnk")
+    run = request.app.state.db.get_latest_cron_run(team_id=team_id)
     return {"run": run}
 
 
@@ -28,7 +29,8 @@ async def taiq_history(
     request: Request,
     _user: dict = _auth,
 ):
-    dates = request.app.state.db.get_cron_dates()
+    team_id = _user.get("team_id", "cnk")
+    dates = request.app.state.db.get_cron_dates(team_id=team_id)
     return {"dates": dates}
 
 
@@ -39,11 +41,12 @@ async def taiq_date(
     keyword: Optional[str] = Query(default=None),
     _user: dict = _auth,
 ):
+    team_id = _user.get("team_id", "cnk")
     db  = request.app.state.db
-    run = db.get_cron_run_by_date(date_str)
+    run = db.get_cron_run_by_date(date_str, team_id=team_id)
     if not run:
         return {"run": None, "tenders": []}
-    tenders = db.get_cron_tenders(run["id"], keyword=keyword)
+    tenders = db.get_cron_tenders(run["id"], keyword=keyword, team_id=team_id)
     return {"run": run, "tenders": tenders}
 
 
@@ -66,8 +69,9 @@ async def taiq_run_tenders(
     keyword: Optional[str] = Query(default=None),
     _user: dict = _auth,
 ):
+    team_id = _user.get("team_id", "cnk")
     db      = request.app.state.db
-    tenders = db.get_cron_tenders(run_id, keyword=keyword)
+    tenders = db.get_cron_tenders(run_id, keyword=keyword, team_id=team_id)
     return {"tenders": tenders, "total": len(tenders)}
 
 
@@ -118,8 +122,9 @@ async def taiq_stop(
     user: dict = _superadmin,
 ):
     import cron_runner
+    team_id = user.get("team_id", "cnk")
     db  = request.app.state.db
-    run = db.get_latest_cron_run()
+    run = db.get_latest_cron_run(team_id=team_id)
     if not run or run["status"] != "running":
         return JSONResponse(
             {"error": "No active run to stop"}, status_code=400
@@ -128,7 +133,7 @@ async def taiq_stop(
     cron_runner.request_stop()
     db.log_activity(
         int(user["sub"]), user["username"], "taiq_stop",
-        details={"run_id": run["id"]},
+        details={"run_id": run["id"], "team_id": team_id},
         ip_address=request.client.host if request.client else None,
     )
     return {"ok": True, "run_id": run["id"],
@@ -142,17 +147,35 @@ async def taiq_trigger(
 ):
     import threading
     import cron_runner
+    team_id = user.get("team_id", "cnk")
     db  = request.app.state.db
-    run = db.get_latest_cron_run()
-    if run and run["status"] == "running":
+
+    current_run_id  = cron_runner.get_current_run_id()
+    active_team_id  = cron_runner.get_current_team_id()
+
+    if current_run_id is not None:
+        if active_team_id and active_team_id.lower() != team_id.lower():
+            other_team = active_team_id.upper()
+            return JSONResponse(
+                {
+                    "error": f"TAiQ is currently running an extraction for the {other_team} Portal (Run #{current_run_id}). Please wait for it to complete."
+                },
+                status_code=400,
+            )
         return JSONResponse(
-            {"error": "A run is already in progress"}, status_code=400
+            {"error": f"An extraction is already in progress for the {team_id.upper()} Portal."},
+            status_code=400,
         )
+
+    # Clean up any stale DB rows marked as running from prior crashes/restarts
+    db.mark_stale_runs_failed()
+
     threading.Thread(
-        target=cron_runner.run_daily_job, daemon=True, name="taiq-manual"
+        target=cron_runner.run_daily_job, args=(team_id,), daemon=True, name=f"taiq-manual-{team_id}"
     ).start()
     db.log_activity(
         int(user["sub"]), user["username"], "taiq_run",
+        details={"team_id": team_id},
         ip_address=request.client.host if request.client else None,
     )
-    return {"ok": True, "message": "Manual run triggered"}
+    return {"ok": True, "message": f"Manual run triggered for {team_id.upper()} team"}

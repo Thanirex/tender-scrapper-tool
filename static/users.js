@@ -44,6 +44,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Username</th>
                         <th>Email</th>
                         <th>Role</th>
+                        <th>Team</th>
                         <th>Created</th>
                         <th>Status</th>
                         <th>Actions</th>
@@ -68,7 +69,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function _userRow(u) {
         const isSelf = u.id === parseInt(currentUser.sub);
-        const canEdit = !isSelf || currentUser.role === 'superadmin';
         const activeLabel = u.is_active
             ? '<span class="status-chip active">Active</span>'
             : '<span class="status-chip inactive">Inactive</span>';
@@ -82,11 +82,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         `;
         const roleLabels = { superadmin: 'Super Admin', admin: 'Admin', user: 'User' };
+        const teamId = (u.team_id || 'cnk').toLowerCase();
+        const teamName = (u.team_name || teamId).toUpperCase();
         return `
             <tr>
                 <td><strong>${u.username}</strong></td>
                 <td>${u.email}</td>
                 <td><span class="role-badge role-${u.role}">${roleLabels[u.role] || u.role}</span></td>
+                <td><span class="team-badge team-${teamId}"><span class="team-dot"></span>${teamName}</span></td>
                 <td class="time-cell">${u.created_at ? u.created_at.split('T')[0] : '—'}</td>
                 <td>${activeLabel}</td>
                 <td class="actions-cell">${actions}</td>
@@ -105,6 +108,9 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('m-email').value    = data?.email    || '';
         document.getElementById('m-password').value = '';
         if (roleSelect) roleSelect.value = data?.role || 'user';
+
+        const teamSelect = document.getElementById('m-team');
+        if (teamSelect) teamSelect.value = data?.team_id || (currentUser?.team_id || 'cnk');
 
         // When editing, password is optional
         const pwLabel = pwWrap.querySelector('label');
@@ -125,6 +131,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const email    = document.getElementById('m-email').value.trim();
         const password = document.getElementById('m-password').value;
         const role     = roleSelect?.value || 'user';
+        const teamSelect = document.getElementById('m-team');
+        const team_id   = teamSelect?.value || 'cnk';
+        const team_name = teamSelect ? teamSelect.options[teamSelect.selectedIndex].text.replace(' Team', '') : 'CNK';
 
         if (!username || !email) {
             modalError.textContent = 'Username and email are required.';
@@ -141,8 +150,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let res;
         if (editingId) {
-            const body = { username, email };
-            if (password) body.password = password; // not a standard UpdateUserRequest field — fine to ignore server-side
             res = await authFetch(`/admin/users/${editingId}`, {
                 method: 'PUT',
                 body: JSON.stringify({ username, email }),
@@ -150,7 +157,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             res = await authFetch('/admin/users', {
                 method: 'POST',
-                body: JSON.stringify({ username, email, password, role }),
+                body: JSON.stringify({ username, email, password, role, team_id, team_name }),
             });
         }
 

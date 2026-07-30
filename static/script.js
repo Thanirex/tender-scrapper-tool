@@ -171,21 +171,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    siteSelect.addEventListener('change', () => updateStep2(siteSelect.value));
+    const activeUser = getUser();
+    const currentTeamId = (activeUser && activeUser.team_id) ? activeUser.team_id.toLowerCase() : 'cnk';
 
-    fetch('/config')
-        .then(res => res.json())
+    authFetch(`/config?team_id=${currentTeamId}`)
+        .then(res => res ? res.json() : { sites: [], keywords: {} })
         .then(data => {
+            if (!data.sites) return;
             siteSelect.innerHTML = data.sites.map(s => {
                 const label = s === 'ungm' ? 'UNGM (UN Global Marketplace)' : s === 'au' ? 'African Union Bids' : s === 'acbf' ? 'ACBF Procurement & Consultancies' : s === 'trademarkafrica' ? 'TradeMark Africa Procurement' : s.toUpperCase();
                 return `<option value="${s}">${label}</option>`;
             }).join('');
             serverKeywords = data.keywords;
-            categorySelect.innerHTML = '<option value="custom">Custom (Type above)</option>';
-            categorySelect.innerHTML += Object.keys(serverKeywords)
-                .map(k => `<option value="${k}">${k}</option>`).join('');
-            siteSelect.value = data.sites[0];
-            updateStep2(siteSelect.value);
+            const categories = Object.keys(serverKeywords);
+            categorySelect.innerHTML = categories.map(k => `<option value="${k}">${k}</option>`).join('');
+            categorySelect.innerHTML += '<option value="custom">Custom (Type above)</option>';
+
+            if (categories.length > 0) {
+                const defaultCat = categories[0];
+                categorySelect.value = defaultCat;
+                if (serverKeywords[defaultCat]) {
+                    keywordsInput.value = serverKeywords[defaultCat].join(', ');
+                }
+            }
+
+            if (data.sites.length > 0) {
+                siteSelect.value = data.sites[0];
+                updateStep2(siteSelect.value);
+            }
         });
 
     categorySelect.addEventListener('change', () => {
