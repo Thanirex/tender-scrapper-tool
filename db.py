@@ -422,7 +422,7 @@ class TenderDB:
             # ── Auto-migrate team_id column onto all primary tables ────────
             for _tbl in ("users", "search_sessions", "found_tenders", "cron_runs", "cron_tenders", "activity_logs"):
                 self._add_col(conn, _tbl, "team_id", f"{_ENUM_TEXT} DEFAULT 'cnk'")
-            self._add_col(conn, "users", "team_name", "TEXT DEFAULT 'CNK'")
+            self._add_col(conn, "users", "team_name", f"{_ENUM_TEXT} DEFAULT 'CNK'")
 
             # ── Tender review / feedback ───────────────────────────────────
             # review_status: 'pending' | 'approved' | 'rejected'
