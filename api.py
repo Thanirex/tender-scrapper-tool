@@ -314,9 +314,11 @@ def _make_run_zip(dirs: list[Path], base: Path, zip_stem: str) -> Path:
 # ── Standard scraper (ngobox / devnet) ────────────────────────────────────
 
 def _run_standard_scrape(site_key: str, keywords: list, log_cb,
-                         result_cb=None) -> list[Path] | None:
+                         result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.excel_writer import write_level1_report
-    agent = ScraperAgent(str(APP_DIR / "sites_config.json"))
+    cfg_dir = APP_DIR / "configs" / "teams" / team_id
+    cfg_file = cfg_dir / "sites_config.json" if (cfg_dir / "sites_config.json").exists() else APP_DIR / "sites_config.json"
+    agent = ScraperAgent(str(cfg_file))
     summarizer = SummarizerAgent()
 
     tender_dirs: list[Path] = []
@@ -1470,9 +1472,11 @@ async def websocket_endpoint(
             try:
                 ts = now_ist_naive().strftime("%Y%m%d_%H%M%S")
 
-                # Determine scraper type from config
+                # Determine scraper type from team config
                 try:
-                    with open(APP_DIR / "sites_config.json") as _f:
+                    cfg_dir = APP_DIR / "configs" / "teams" / team_id
+                    sites_cfg_file = cfg_dir / "sites_config.json" if (cfg_dir / "sites_config.json").exists() else APP_DIR / "sites_config.json"
+                    with open(sites_cfg_file) as _f:
                         _sites_cfg = json.load(_f)
                     _scraper_type = _sites_cfg.get(site_key, {}).get("scraper_type", "standard")
                 except Exception:
@@ -1556,7 +1560,7 @@ async def websocket_endpoint(
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 else:
-                    result = _run_standard_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_standard_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key

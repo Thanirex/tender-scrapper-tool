@@ -827,14 +827,211 @@ details.advanced-settings summary {
 
 .results-summary {
     font-size: 0.9rem;
+    background: var(--success);
+    animation: none;
+}
+
+.tracker-step.done .tracker-icon::after {
+    content: "✓";
+    color: white;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
+.tracker-content h4 {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.tracker-content p {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    margin-top: 0.1rem;
+}
+
+/* =============================================
+   KEYWORD PILL
+   ============================================= */
+.keyword-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    background: linear-gradient(135deg, var(--primary) 0%, #3b82f6 100%);
+    color: white;
+    padding: 0.35rem 0.85rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-top: 0.65rem;
+    box-shadow: 0 3px 12px rgba(39,39,42,0.3);
+}
+
+.keyword-pill.pill-enter {
+    animation: pillPop 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+}
+
+@keyframes pillPop {
+    from { opacity: 0; transform: scale(0.55) translateX(-10px); }
+    to   { opacity: 1; transform: scale(1) translateX(0); }
+}
+
+.kp-live-dot {
+    width: 6px;
+    height: 6px;
+    background: rgba(255,255,255,0.75);
+    border-radius: 50%;
+    animation: liveDot 1.1s ease infinite;
+    flex-shrink: 0;
+}
+
+@keyframes liveDot {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.35; transform: scale(0.55); }
+}
+
+/* =============================================
+   SCAN DOTS
+   ============================================= */
+.scan-dots {
+    display: flex;
+    gap: 5px;
+    margin-top: 0.55rem;
+}
+
+.scan-dots span {
+    width: 7px;
+    height: 7px;
+    background: var(--primary);
+    border-radius: 50%;
+    opacity: 0.35;
+    animation: scanBounce 1.3s ease infinite;
+}
+
+.scan-dots span:nth-child(2) { animation-delay: 0.18s; }
+.scan-dots span:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes scanBounce {
+    0%,100% { transform: translateY(0);    opacity: 0.35; }
+    40%      { transform: translateY(-7px); opacity: 1; }
+}
+
+/* =============================================
+   ROBOT FACE
+   ============================================= */
+.robot-container {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 0.7rem;
+}
+
+.robot-face {
+    font-size: 2rem;
+    animation: robotFloat 2.2s ease-in-out infinite;
+    filter: drop-shadow(0 3px 8px rgba(39,39,42,0.25));
+    line-height: 1;
+}
+
+@keyframes robotFloat {
+    0%,100% { transform: translateY(0) rotate(-4deg); }
+    25%      { transform: translateY(-8px) rotate(3deg); }
+    55%      { transform: translateY(-3px) rotate(-2deg); }
+    80%      { transform: translateY(-10px) rotate(4deg); }
+}
+
+.robot-thinking {
+    font-size: 0.78rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* =============================================
+   THOUGHT STREAM
+   ============================================= */
+.thought-stream {
+    margin-top: 1.75rem;
+    min-height: 44px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    overflow: hidden;
+}
+
+.thought-bubble {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--primary-light);
+    color: var(--primary);
+    padding: 0.45rem 1rem;
+    border-radius: 9999px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    width: fit-content;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    animation: bubbleIn 0.45s cubic-bezier(0.34,1.56,0.64,1) forwards;
+}
+
+.thought-bubble.fading {
+    animation: bubbleFade 0.35s ease forwards;
+}
+
+@keyframes bubbleIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.85); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes bubbleFade {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(-8px); }
+}
+
+/* =============================================
+   RESULTS SECTION (full-width below panels)
+   ============================================= */
+.results-section {
+    margin-top: 2.5rem;
+    animation: fadeIn 0.5s ease forwards;
+}
+
+.results-section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.results-title-block {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.results-title-block h2 {
+    font-size: 1.4rem;
+    font-weight: 700;
+}
+
+.results-summary {
+    font-size: 0.9rem;
     color: var(--text-muted);
     margin-bottom: 1.25rem;
 }
 
 .results-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 1rem;
+    width: 100%;
+    min-width: 0;
 }
 
 @media (max-width: 1100px) {
@@ -862,6 +1059,10 @@ details.advanced-settings summary {
     gap: 0.5rem;
     transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     animation: cardPop 0.45s cubic-bezier(0.34,1.56,0.64,1) backwards;
+    min-width: 0;
+    overflow: hidden;
+    word-break: break-word;
+    box-sizing: border-box;
 }
 
 @keyframes cardPop {
@@ -898,6 +1099,7 @@ details.advanced-settings summary {
     display: flex;
     align-items: baseline;
     gap: 0.4rem;
+    min-width: 0;
 }
 
 .card-field strong {
@@ -914,15 +1116,17 @@ details.advanced-settings summary {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    min-width: 0;
 }
 
 .card-actions {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.5rem;
     margin-top: auto;
-    padding-top: 0.35rem;
+    padding-top: 0.5rem;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
 .card-link {
@@ -2035,7 +2239,9 @@ details.advanced-settings summary {
     border-top: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
 }
 .card-file-item {
     display: flex;
@@ -2043,6 +2249,8 @@ details.advanced-settings summary {
     gap: 6px;
     font-size: 0.76rem;
     color: var(--text-muted);
+    min-width: 0;
+    width: 100%;
 }
 .card-file-item svg { flex-shrink: 0; opacity: 0.6; }
 .card-file-item a {
@@ -2051,7 +2259,8 @@ details.advanced-settings summary {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    max-width: 100%;
+    min-width: 0;
+    flex: 1;
 }
 .card-file-item a:hover { text-decoration: underline; }
 
@@ -2396,9 +2605,10 @@ details.advanced-settings summary {
 /* ── Main layout (calendar + right panel) ──────────────────────────────── */
 .taiq-layout {
     display: grid;
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 280px minmax(0, 1fr);
     gap: 1.5rem;
     align-items: start;
+    min-width: 0;
 }
 @media (max-width: 860px) {
     .taiq-layout { grid-template-columns: 1fr; }
@@ -2529,6 +2739,7 @@ details.advanced-settings summary {
     flex-direction: column;
     gap: 1rem;
     min-height: 300px;
+    min-width: 0;
 }
 
 .taiq-empty-state {

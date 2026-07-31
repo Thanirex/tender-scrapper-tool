@@ -362,7 +362,7 @@ def run_daily_job(team_id: str = "cnk"):
             from agents.chai_scraper_agent import CHAIScraperAgent
             from agents.reliefweb_scraper_agent import ReliefWebScraperAgent
             from agents.file_reader import read_file as _read_file
-            std_agent          = ScraperAgent(str(APP_DIR / "sites_config.json"))
+            std_agent          = ScraperAgent(str(cfg_file))
             nasscom_agent      = NasscomScraperAgent()
             au_agent           = AUScraperAgent()
             acbf_agent         = ACBFScraperAgent()
@@ -520,7 +520,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("release_date", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -578,7 +578,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("deadline", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -649,7 +649,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("deadline", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -720,7 +720,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("closing_date", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -791,7 +791,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date="", summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -862,7 +862,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("deadline", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -933,7 +933,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("deadline", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1004,7 +1004,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("deadline", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1075,7 +1075,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("published", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1133,7 +1133,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date=res.get("published", ""), summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1204,7 +1204,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date="", summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)
@@ -1256,7 +1256,7 @@ def run_daily_job(team_id: str = "cnk"):
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
                                 published_date="", summary=fields,
-                                tender_dir=tender_dir_rel,
+                                tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
                             _db.update_cron_run(run_id, total_tenders=total_tenders)

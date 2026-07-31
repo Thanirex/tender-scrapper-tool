@@ -448,6 +448,14 @@ class TenderDB:
             """)
             self._idx(conn, False, "idx_tender_comments_t", "tender_comments", "tender_id")
 
+            # ── Retroactive repair: sync cron_tenders.team_id with parent cron_runs.team_id ──
+            conn.execute("""
+                UPDATE cron_tenders
+                SET team_id = (SELECT team_id FROM cron_runs WHERE cron_runs.id = cron_tenders.run_id)
+                WHERE run_id IN (SELECT id FROM cron_runs WHERE team_id != 'cnk')
+                  AND (team_id IS NULL OR team_id = 'cnk')
+            """)
+
     # ── Dedup ──────────────────────────────────────────────────────────────────
 
     def is_duplicate(self, title: str, url: str = "") -> bool:
