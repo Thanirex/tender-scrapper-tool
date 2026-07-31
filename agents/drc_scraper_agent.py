@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from date_utils import is_within_24h_ist
+from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
 from keyword_utils import keyword_matches, find_negative_keyword
 
 # JS to scrape all tender entries from the DRC listing page.
@@ -29,7 +29,7 @@ _JS_LIST = """
         let href = link ? link.getAttribute('href') : '';
         if (href && href.startsWith('/')) href = BASE + href;
 
-        // Use datetime attr (YYYY-MM-DD) — compatible with date_utils.is_within_24h_ist
+        // Use datetime attr (YYYY-MM-DD) — compatible with date_utils.is_within_cutoff_ist
         const published = pubTime  ? pubTime.getAttribute('datetime')  : (a.dataset.published || '');
         const deadline  = deadTime ? deadTime.getAttribute('datetime') : (a.dataset.deadline  || '');
         const status    = (a.dataset.status || '').toLowerCase();
@@ -44,7 +44,10 @@ class DRCScraperAgent:
     BASE_URL    = "https://drc.ngo"
     LISTING_URL = "https://drc.ngo/en/tenders/"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -103,24 +106,25 @@ class DRCScraperAgent:
                         log(f"   ⏭ Skipping '{title[:60]}' — tender is {status}")
                         continue
 
-                    # ── 24-hour publication check ─────────────────────────────
-                    if published:
-                        if not is_within_24h_ist(published):
+                    # ── Publication / Deadline check ─────────────────────────
+                    date_to_check = deadline if deadline else published
+                    if date_to_check:
+                        if not is_date_or_deadline_valid(date_to_check, max_age_hours):
                             n_stale += 1
-                            log(f"   📅 Skipping '{title[:60]}' — matched, but published {published} (>24h ago)")
+                            log(f"   📅 Skipping '{title[:60]}' — date/deadline {date_to_check} expired")
                             continue
                     else:
-                        log(f"   ⚠️ No published date for '{title[:60]}' — processing anyway")
+                        log(f"   ⚠️ No date found for '{title[:60]}' — processing anyway")
 
                     # ── Dedup check ───────────────────────────────────────────
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
                     n_opened += 1
                     log(f"   📄 Opening: {title[:70]}")
-                    rec = self._extract_detail(ctx, url, keyword, title, published, deadline, base, log, db)
+                    rec = self._extract_detail(ctx, url, keyword, title, published, deadline, base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
@@ -143,7 +147,7 @@ class DRCScraperAgent:
 
     # ── Detail page extraction ─────────────────────────────────────────────
 
-    def _extract_detail(self, ctx, url, keyword, title, published, deadline, base_dir, log, db=None):
+    def _extract_detail(self, ctx, url, keyword, title, published, deadline, base_dir, log, db=None, team_id: str = "cnk"):
         detail = ctx.new_page()
         try:
             detail.goto(url, wait_until="domcontentloaded", timeout=45000)

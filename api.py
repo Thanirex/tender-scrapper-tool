@@ -348,15 +348,19 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb,
             log_cb(f"✅ Saved: {excel_path}")
         return on_result_ready
 
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
+
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
         agent.search(site_key, kw, log_callback=log_cb,
-                     on_result_ready=make_callback(kw), db=_db)
+                     on_result_ready=make_callback(kw), db=_db,
+                     team_id=team_id)
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -366,7 +370,7 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb,
 # ── Nasscom scraper (PDF-download, no search box, dedup-only) ─────────────
 
 def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
-                        result_cb=None) -> list[Path] | None:
+                        result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.nasscom_scraper_agent import NasscomScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -425,6 +429,7 @@ def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -440,7 +445,7 @@ def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
 # ── TradeMark Africa scraper (WP REST API + PDF download) ─────────────────
 
 def _run_trademarkafrica_scrape(site_key: str, keywords: list, log_cb,
-                                result_cb=None) -> list[Path] | None:
+                                result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.trademark_africa_scraper_agent import TradeMarkAfricaScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -503,6 +508,7 @@ def _run_trademarkafrica_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -518,7 +524,7 @@ def _run_trademarkafrica_scrape(site_key: str, keywords: list, log_cb,
 # ── World Bank Group Procurement scraper ──────────────────────────────────
 
 def _run_worldbank_scrape(site_key: str, keywords: list, log_cb,
-                          result_cb=None) -> list[Path] | None:
+                          result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.worldbank_scraper_agent import WorldBankScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -581,6 +587,7 @@ def _run_worldbank_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -596,7 +603,7 @@ def _run_worldbank_scrape(site_key: str, keywords: list, log_cb,
 # ── FHI 360 scraper (single listing page, HR-delimited blocks) ─────────────
 
 def _run_fhi360_scrape(site_key: str, keywords: list, log_cb,
-                       result_cb=None) -> list[Path] | None:
+                       result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.fhi360_scraper_agent import FHI360ScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -659,6 +666,7 @@ def _run_fhi360_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -674,7 +682,7 @@ def _run_fhi360_scrape(site_key: str, keywords: list, log_cb,
 # ── Gatsby Africa scraper (search + detail page + PDF download) ────────────
 
 def _run_gatsbyafrica_scrape(site_key: str, keywords: list, log_cb,
-                              result_cb=None) -> list[Path] | None:
+                              result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.gatsby_africa_scraper_agent import GatsbyAfricaScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -737,6 +745,7 @@ def _run_gatsbyafrica_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -752,7 +761,7 @@ def _run_gatsbyafrica_scrape(site_key: str, keywords: list, log_cb,
 # ── JSI scraper (listing → detail → RFP download via solicitations CDN) ───
 
 def _run_jsi_scrape(site_key: str, keywords: list, log_cb,
-                    result_cb=None) -> list[Path] | None:
+                    result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.jsi_scraper_agent import JSIScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -815,6 +824,7 @@ def _run_jsi_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
@@ -830,10 +840,12 @@ def _run_jsi_scrape(site_key: str, keywords: list, log_cb,
 # ── CHAI scraper (RFP listing, 24h filter, wp-content doc download) ───────
 
 def _run_chai_scrape(site_key: str, keywords: list, log_cb,
-                     result_cb=None) -> list[Path] | None:
+                     result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.chai_scraper_agent import CHAIScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = CHAIScraperAgent()
     summarizer = SummarizerAgent()
@@ -893,12 +905,13 @@ def _run_chai_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -908,10 +921,12 @@ def _run_chai_scrape(site_key: str, keywords: list, log_cb,
 # ── DRC scraper (table listing, active + 24h filter, detail page docs) ────
 
 def _run_drc_scrape(site_key: str, keywords: list, log_cb,
-                    result_cb=None) -> list[Path] | None:
+                    result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.drc_scraper_agent import DRCScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = DRCScraperAgent()
     summarizer = SummarizerAgent()
@@ -971,12 +986,13 @@ def _run_drc_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -986,10 +1002,12 @@ def _run_drc_scrape(site_key: str, keywords: list, log_cb,
 # ── AFROSAI-E scraper (listing page, direct PDF download) ─────────────────
 
 def _run_afrosai_scrape(site_key: str, keywords: list, log_cb,
-                         result_cb=None) -> list[Path] | None:
+                         result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.afrosai_scraper_agent import AfrosaiScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = AfrosaiScraperAgent()
     summarizer = SummarizerAgent()
@@ -1049,12 +1067,13 @@ def _run_afrosai_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -1064,9 +1083,11 @@ def _run_afrosai_scrape(site_key: str, keywords: list, log_cb,
 # ── ACBF scraper (list-based, page-content-only) ──────────────────────────
 
 def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
-                     result_cb=None) -> list[Path] | None:
+                     result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.acbf_scraper_agent import ACBFScraperAgent
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = ACBFScraperAgent()
     summarizer = SummarizerAgent()
@@ -1111,12 +1132,13 @@ def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -1126,9 +1148,11 @@ def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
 # ── ReliefWeb Jobs scraper (search + pagination, page-content Level 1) ─────
 
 def _run_reliefweb_scrape(site_key: str, keywords: list, log_cb,
-                          result_cb=None) -> list[Path] | None:
+                          result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.reliefweb_scraper_agent import ReliefWebScraperAgent
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = ReliefWebScraperAgent()
     summarizer = SummarizerAgent()
@@ -1173,12 +1197,95 @@ def _run_reliefweb_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
+        return None
+
+    log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
+    return tender_dirs
+
+
+# ── NGOBOX scraper (search + detail page + document download) ──────────────
+
+def _run_ngobox_scrape(site_key: str, keywords: list, log_cb,
+                       result_cb=None, team_id: str = "tmi") -> list[Path] | None:
+    from agents.ngobox_scraper_agent import NGOBOXScraperAgent
+    from agents.file_reader import read_file
+    from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
+
+    agent      = NGOBOXScraperAgent()
+    summarizer = SummarizerAgent()
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
+    run_dir    = DOWNLOADS_DIR / site_key / timestamp
+    tender_dirs: list[Path] = []
+
+    log_cb("🚀 Starting NGOBOX RFPs & EOIs Scraper...")
+
+    def on_result_ready(res):
+        title = res.get("title", "Unknown")
+        log_cb(f"📊 Summarizing: {title[:55]}...")
+
+        text_parts = []
+        page_text  = res.get("page_text", "").strip()
+        if page_text:
+            text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
+
+        _MAX_CHARS = 25_000
+        for fpath in res.get("files", []):
+            try:
+                file_text = read_file(fpath)
+                if file_text and file_text.strip():
+                    fname = os.path.basename(fpath)
+                    text_parts.append(
+                        f"=== DOCUMENT: {fname} ===\n{file_text[:_MAX_CHARS].strip()}"
+                    )
+            except Exception as fe:
+                log_cb(f"⚠️ read_file error: {fe}")
+
+        combined = "\n\n".join(text_parts)
+        fields   = summarizer.summarize_level1(combined, log_callback=log_cb)
+
+        tender_dir = Path(res.get("tender_dir", str(run_dir)))
+        safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+        excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
+
+        record = {
+            "keyword":    res.get("keyword", ""),
+            "title":      title,
+            "url":        res.get("url", ""),  # NGOBOX detail page link preserved!
+            "site":       site_key,
+            "fields":     fields,
+            "files":      res.get("files", []),
+            "tender_dir": res.get("tender_dir", ""),
+        }
+        write_level1_report([record], excel_path)
+        tender_dirs.append(tender_dir)
+        if result_cb:
+            result_cb(record)
+        log_cb(f"✅ Saved: {excel_path}")
+
+    for kw in keywords:
+        log_cb(f"▶️ Processing keyword: {kw}")
+        agent.search(
+            kw,
+            output_dir=str(run_dir),
+            log_callback=log_cb,
+            on_result_ready=on_result_ready,
+            db=_db,
+            team_id=team_id,
+        )
+
+    if not tender_dirs:
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -1188,10 +1295,12 @@ def _run_reliefweb_scrape(site_key: str, keywords: list, log_cb,
 # ── African Union scraper (list-based, direct doc download) ───────────────
 
 def _run_au_scrape(site_key: str, keywords: list, log_cb,
-                   result_cb=None) -> list[Path] | None:
+                   result_cb=None, team_id: str = "cnk") -> list[Path] | None:
     from agents.au_scraper_agent import AUScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
+    from date_utils import get_max_age_hours
+    max_age_hours = get_max_age_hours(team_id)
 
     agent      = AUScraperAgent()
     summarizer = SummarizerAgent()
@@ -1251,12 +1360,13 @@ def _run_au_scrape(site_key: str, keywords: list, log_cb,
             log_callback=log_cb,
             on_result_ready=on_result_ready,
             db=_db,
+            team_id=team_id,
         )
 
     if not tender_dirs:
-        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
-               "outside the 24-hour window, already collected in an earlier run, "
-               "or didn't match your keywords.")
+        log_cb(f"ℹ️ Run finished — nothing new to save. Everything listed was either "
+               f"outside the {max_age_hours}-hour window, already collected in an earlier run, "
+               f"or didn't match your keywords.")
         return None
 
     log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
@@ -1266,7 +1376,7 @@ def _run_au_scrape(site_key: str, keywords: list, log_cb,
 # ── UNGM scraper ───────────────────────────────────────────────────────────
 
 def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
-                     result_cb=None) -> Path | None:
+                     result_cb=None, team_id: str = "cnk") -> Path | None:
     from agents.ungm_scraper_agent import UNGMScraperAgent
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
@@ -1358,7 +1468,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
     agent = UNGMScraperAgent()
     agent.scrape(email, password, keywords, str(run_dir),
                  headless=not show_browser, log_callback=log_cb,
-                 on_tender_ready=on_tender_ready, db=_db)
+                 on_tender_ready=on_tender_ready, db=_db, team_id=team_id)
 
     if not excel_paths:
         log_cb("⚠️ No tenders found.")
@@ -1483,78 +1593,84 @@ async def websocket_endpoint(
                     _scraper_type = "standard"
 
                 if site_key == "ungm":
-                    result = _run_ungm_scrape(keywords, credentials, log_cb, result_cb)
+                    result = _run_ungm_scrape(keywords, credentials, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         zip_path = _make_run_zip([result], result, f"UNGM_{ts}")
                 elif _scraper_type == "nasscom":
-                    result = _run_nasscom_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_nasscom_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "au":
-                    result = _run_au_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_au_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "acbf":
-                    result = _run_acbf_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_acbf_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "trademarkafrica":
-                    result = _run_trademarkafrica_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_trademarkafrica_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "worldbank":
-                    result = _run_worldbank_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_worldbank_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "fhi360":
-                    result = _run_fhi360_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_fhi360_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "gatsbyafrica":
-                    result = _run_gatsbyafrica_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_gatsbyafrica_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "afrosai":
-                    result = _run_afrosai_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_afrosai_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "jsi":
-                    result = _run_jsi_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_jsi_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "drc":
-                    result = _run_drc_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_drc_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "chai":
-                    result = _run_chai_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_chai_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "reliefweb":
-                    result = _run_reliefweb_scrape(site_key, keywords, log_cb, result_cb)
+                    result = _run_reliefweb_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
+                    if result:
+                        log_cb("📦 Packaging all results into ZIP...")
+                        base = DOWNLOADS_DIR / site_key
+                        zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
+                elif _scraper_type == "ngobox":
+                    result = _run_ngobox_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key

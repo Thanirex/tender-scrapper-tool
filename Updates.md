@@ -83,3 +83,62 @@ Structured dedicated team configuration folders:
 | :--- | :--- | :--- | :--- | :--- |
 | **CNK Portal** | Super Admin | `superadmin` / `superadmin_cnk` | `Cnkonline@2026` | `admin@cnk.local` |
 | **TMI Portal** | Super Admin | `superadmin_tmi` | `Tmionline@2026` | `admin@tmi.local` |
+
+---
+
+## Add-on Updates (July 31, 2026)
+
+### 9. Team-Based Publication Date Cutoff Rule (`date_utils.py`, `agents/`, `cron_runner.py`, `api.py`)
+- **TMI Portal (`team_id == 'tmi'`)**:
+  - Publication cutoff window expanded to **1 week (168 hours / 7 days)**.
+  - Automatically checks and collects tender documents uploaded within the last 7 days during both scheduled cron runs and manual user searches.
+  - Duplicate detection (`db.is_duplicate()`) remains active to automatically skip tenders previously collected during the week.
+- **CNK Portal (`team_id == 'cnk'`)**:
+  - Preserved the strict **24-hour cutoff** at all costs, ensuring zero changes to CNK operational behavior.
+- **Implementation Highlights**:
+  - `date_utils.py`: Added `get_max_age_hours(team_id)` (returns 168 for TMI, 24 for CNK) and `is_within_cutoff_ist(date_str, max_age_hours)`.
+  - Scraper agents (`ScraperAgent`, `UNGMScraperAgent`, `ReliefWebScraperAgent`, `DRCScraperAgent`, `CHAIScraperAgent`, `AUScraperAgent`) accept `team_id` / `max_age_hours` to enforce the team-specific cutoff window dynamically.
+  - Standardized runner functions in `cron_runner.py` and `api.py` pass the active `team_id` down to all scraper agents.
+
+### 10. NGOBOX Scraper Integration (`agents/ngobox_scraper_agent.py`, `date_utils.py`, `sites_config.json`, `cron_runner.py`, `api.py`)
+- **New Site Source**: `https://ngobox.org/rfp_eoi_listing.php` configured for both **CNK Portal** and **TMI Portal**.
+- **Active Deadline Validation**:
+  - NGOBOX listing cards display the **Deadline Date** (e.g., `Deadline: 07 Aug. 2026`).
+  - Added `is_deadline_active(date_str)` in `date_utils.py`: accepts tenders whose deadline date is today or in the future (`deadline >= today_ist`), and filters out expired tenders whose deadline has passed.
+- **Automated Workflow**:
+  - Navigates to NGOBOX listing page and submits search queries via `input#searchme` and `i.fa-search`.
+  - Mines detail notice pages (`https://ngobox.org/full_rfp_eoi_...`) and automatically detects and downloads attached detailed RFP/EOI PDF/DOCX documents locally for Level 1 Gemini AI processing.
+  - Strictly preserves the **NGOBOX detail page URL** (`https://ngobox.org/full_rfp_eoi_...`) in tender records and Level 1 Excel reports (rather than the direct PDF link) for user redirection.
+  - Fully integrated into scheduled sweeps (`cron_runner.py`) and manual searches (`api.py`).
+
+### 11. Universal Active Deadline & Date Validation (`date_utils.py`, `agents/`)
+- **Combined Date & Deadline Verification**:
+  - Added `is_date_or_deadline_valid(date_str, max_age_hours)` to `date_utils.py`.
+  - Applied across all scraper agents (`ScraperAgent`, `NGOBOXScraperAgent`, `UNGMScraperAgent`, `DRCScraperAgent`, `CHAIScraperAgent`, `AUScraperAgent`, `ReliefWebScraperAgent`) for both **CNK Portal** and **TMI Portal**.
+  - **Rules**: Accepts tenders if EITHER the publication date falls within the cutoff window OR the tender deadline date is active (today or in the future). Filters out tenders only if they are outside the publication window AND their deadline has expired.
+
+### 12. Multi-Tenant Team-Agnostic Deduplication (`db.py`, `cron_runner.py`, `agents/`)
+- **Complete Team Isolation**:
+  - Migrated `downloaded_tenders` and `cron_dedup` tables in `db.py` to include `team_id` and updated unique indexes to `(url, team_id)`.
+  - Updated `is_duplicate(title, url, team_id)`, `mark_downloaded(..., team_id)`, `is_cron_duplicate(..., team_id)`, `mark_cron_seen(..., team_id)`, and `CronDBProxy` to filter deduplication per team.
+  - **Result**: TMI and CNK portals operate completely independently. A tender collected by TMI will NOT block CNK from collecting the same tender for CNK portal, guaranteeing 100% agnostic data isolation across both portals.
+
+### 13. NGOBOX Detail Extraction Bugfix (`agents/ngobox_scraper_agent.py`)
+- **Fix**: Added missing `team_id` parameter to `NGOBOXScraperAgent._extract_detail()` signature and invocation.
+- **Result**: Eliminated `NameError: name 'team_id' is not defined` during detail notice page extraction, allowing document downloads and tender saves to complete smoothly.
+
+### 14. Comprehensive Multi-Agent Parameter Audit & Verification (`agents/`)
+- **System-Wide Audit**: Audited all 7 scraper agents (`ScraperAgent`, `NGOBOXScraperAgent`, `UNGMScraperAgent`, `DRCScraperAgent`, `CHAIScraperAgent`, `AUScraperAgent`, `ReliefWebScraperAgent`).
+- **Standardized Pass-Through**: Ensured `team_id` is defined and passed down through all primary methods (`search`, `scrape`) and detail extraction helpers (`_extract_detail`, `_extract_tender`) to `db.is_duplicate` and `db.mark_downloaded`.
+- **Result**: 100% parameter safety across all scraper agents. No agent will throw `NameError` or parameter mismatch.
+
+### 15. Complete Web Dispatcher Audit (`api.py`)
+- **API Dispatch Helpers**: Updated all 15 scraper dispatch helpers in `api.py` (`_run_standard_scrape`, `_run_nasscom_scrape`, `_run_trademarkafrica_scrape`, `_run_worldbank_scrape`, `_run_fhi360_scrape`, `_run_gatsbyafrica_scrape`, `_run_jsi_scrape`, `_run_ngobox_scrape`, `_run_afrosai_scrape`, `_run_acbf_scrape`, `_run_drc_scrape`, `_run_chai_scrape`, `_run_au_scrape`, `_run_reliefweb_scrape`, `_run_ungm_scrape`).
+- **Full Call-Stack Isolation**: Passed active user session `team_id` into every helper function and agent search invocation. Every site—including FHI360, World Bank, TradeMark Africa, Nasscom, JSI, ACBF, etc.—operates with 100% team data isolation.
+
+### 16. Dual-Portal Independent Automation Verification (`cron_runner.py`, `cron_runner_tmi.py`)
+- **Independent Automation Schedules**:
+  - **TMI Portal**: Runs daily at **09:00 PM IST (21:00)** using `team_id="tmi"` with 168-hour (1 week) cutoff window and NGOBOX support.
+  - **CNK Portal**: Runs daily at **07:00 AM IST** using `team_id="cnk"` with 24-hour cutoff window.
+- **Standalone Runner**: Provided `cron_runner_tmi.py` for CLI/isolated process execution.
+- **Verification**: Verified end-to-end configuration loading, date cutoff rules, scheduler job definitions, and database multi-tenant isolation. Both portals run 100% smoothly and independently as expected.

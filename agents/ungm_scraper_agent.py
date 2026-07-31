@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from date_utils import is_within_24h_ist, extract_date_from_text
+from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
 from keyword_utils import keyword_matches, find_negative_keyword
 
 class UNGMScraperAgent:
@@ -16,7 +16,9 @@ class UNGMScraperAgent:
 
     def scrape(self, email: str, password: str, keywords: list, run_dir: str,
                headless: bool = True, log_callback=None, on_tender_ready=None,
-               db=None) -> list:
+               db=None, team_id: str = "cnk", max_age_hours: int | None = None) -> list:
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
         """
         Full UNGM flow: login → per-keyword search → extract → download.
         on_tender_ready(rec): optional callback fired immediately after each tender
@@ -50,7 +52,7 @@ class UNGMScraperAgent:
 
                 for keyword in keywords:
                     log(f"▶️ Keyword: '{keyword}'")
-                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log, on_tender_ready, db)
+                    kw_results = self._search_keyword(page, ctx, keyword, run_dir, log, on_tender_ready, db, max_age_hours=max_age_hours, team_id=team_id)
                     all_results.extend(kw_results)
                     log(f"   ↳ {len(kw_results)} tenders processed for '{keyword}'")
 
@@ -104,7 +106,7 @@ class UNGMScraperAgent:
         log("✅ Logged in.")
         return True
 
-    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None) -> list:
+    def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None, max_age_hours: int = 24, team_id: str = "cnk") -> list:
         if not self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle"):
             return []
 
@@ -166,23 +168,32 @@ class UNGMScraperAgent:
 
         try:
             total_label = page.locator("#noticeSearchTotal").text_content().strip()
-            log(f"   ↳ UNGM reports {total_label} results for '{keyword}'")
+            log(f"   ↳ Total matching notices reported: {total_label}")
         except Exception:
             pass
 
-        # Collect all notice hrefs in ONE JS call — no per-element round trips
+        # Extract notice links from the current page.
+        # hrefs match /Public/Notice/123456
+        hrefs = []
         try:
+            # Wait for table rows to arrive
+            page.locator("table#tblNotices tbody tr").first.wait_for(state="visible", timeout=10000)
             raw_hrefs = page.eval_on_selector_all(
-                "#tblNotices a[href*='/Public/Notice/']",
-                "els => [...new Set(els.map(e => e.href))].filter(h => /\\/Public\\/Notice\\/\\d+/.test(h))"
+                "table#tblNotices tbody tr a[href*='/Public/Notice/']",
+                "els => els.map(e => e.getAttribute('href')).filter(h => h)"
             )
-        except Exception:
-            raw_hrefs = []
-
-        hrefs = raw_hrefs
+            seen = set()
+            for h in raw_hrefs:
+                full = self.BASE_URL + h if not h.startswith("http") else h
+                if full not in seen:
+                    seen.add(full)
+                    hrefs.append(full)
+        except Exception as e:
+            log(f"   ⚠️ Could not extract notice rows: {e}")
+            return []
 
         if not hrefs:
-            log(f"   ↳ No results found")
+            log(f"   ↳ No notice links extracted for '{keyword}'")
             return []
 
         log(f"   ↳ Opening {len(hrefs)} tenders")
@@ -191,7 +202,7 @@ class UNGMScraperAgent:
         stats = {"error": 0, "title_miss": 0, "neg": 0, "stale": 0, "no_date": 0, "dup": 0}
         for idx, href in enumerate(hrefs):
             log(f"   📄 [{idx+1}/{len(hrefs)}] {href}")
-            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log, db, stats=stats)
+            rec = self._extract_tender(page, ctx, href, keyword, run_dir, log, db, stats=stats, max_age_hours=max_age_hours, team_id=team_id)
             if rec:
                 results.append(rec)
                 if on_tender_ready:
@@ -200,7 +211,7 @@ class UNGMScraperAgent:
         log(
             f"   📊 '{keyword}' summary on UNGM: {len(hrefs)} notice(s) opened → "
             f"{stats['title_miss']} without the keyword in the title, "
-            f"{stats['neg']} blocked by negative keywords, {stats['stale']} older than 24h, "
+            f"{stats['neg']} blocked by negative keywords, {stats['stale']} older than {max_age_hours}h, "
             f"{stats['no_date']} missing a publish date, {stats['dup']} already collected, "
             f"{stats['error']} failed to load, {len(results)} saved"
         )
@@ -212,7 +223,7 @@ class UNGMScraperAgent:
         "forbidden", "page not found", "error 500", "bad request",
     }
 
-    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None, stats=None) -> dict | None:
+    def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None, stats=None, max_age_hours: int = 24, team_id: str = "cnk") -> dict | None:
         """
         Open the notice in a FRESH TAB so the search-results page stays intact.
         The original `page` is never navigated away — only used for keyword search.
@@ -236,7 +247,7 @@ class UNGMScraperAgent:
                 notice_page.locator("h1").wait_for(state="visible", timeout=10000)
             except Exception:
                 _bump("error")
-                log(f"      ⚠️ Page did not render (h1 not visible after 10 s) — skipping.")
+                log(f"      ❌ Notice page did not render (h1 missing) — skipping")
                 return None
 
             # Session-expired: UNGM redirects silently to /Login
@@ -302,22 +313,26 @@ class UNGMScraperAgent:
                 _bump("neg")
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "ungm", keyword, "")
+                    db.mark_downloaded(title, url, "ungm", keyword, "", team_id=team_id)
                 return None
 
-            # ── Date filter: last 24 hours IST ──────────────────────────────
-            # Try verified "Published on" field first; fall back to body text.
+            # ── Date filter: active publication or deadline ─────────────────
             pub_date = next(
                 (v for k, v in verified.items() if "published" in k.lower()),
                 None,
             )
-            if not pub_date:
-                pub_date = extract_date_from_text(body_text)
+            deadline_date = next(
+                (v for k, v in verified.items() if "deadline" in k.lower() or "express" in k.lower()),
+                None,
+            )
+            date_to_check = deadline_date if deadline_date else pub_date
+            if not date_to_check:
+                date_to_check = extract_date_from_text(body_text)
 
-            if pub_date:
-                if not is_within_24h_ist(pub_date):
+            if date_to_check:
+                if not is_date_or_deadline_valid(date_to_check, max_age_hours):
                     _bump("stale")
-                    log(f"      📅 Skipping '{title[:60]}' — matched, but published {pub_date} (>24h ago)")
+                    log(f"      📅 Skipping '{title[:60]}' — date/deadline {date_to_check} expired")
                     return None
             else:
                 _bump("no_date")
@@ -325,7 +340,7 @@ class UNGMScraperAgent:
                 return None
 
             # ── Deduplication check ──────────────────────────────────────────
-            if db and db.is_duplicate(title, url):
+            if db and db.is_duplicate(title, url, team_id=team_id):
                 _bump("dup")
                 log(f"      ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                 return None
@@ -601,7 +616,7 @@ class UNGMScraperAgent:
 
             # Mark in DB so subsequent keywords don't re-download this tender
             if db:
-                db.mark_downloaded(title, url, "ungm", keyword, pub_date or "")
+                db.mark_downloaded(title, url, "ungm", keyword, pub_date or "", team_id=team_id)
 
             return {
                 "keyword": keyword,

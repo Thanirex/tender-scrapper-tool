@@ -128,5 +128,11 @@
         "scraper_type": "reliefweb",
         "display_name": "ReliefWeb Jobs",
         "skip_date_filter": false
+    },
+    "ngobox": {
+        "url": "https://ngobox.org/rfp_eoi_listing.php",
+        "scraper_type": "ngobox",
+        "display_name": "NGOBOX (RFPs & EOIs)",
+        "skip_date_filter": false
     }
 }

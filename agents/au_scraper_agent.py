@@ -6,7 +6,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from date_utils import is_within_24h_ist
+from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
 from paths import DOWNLOADS_DIR
 from keyword_utils import keyword_matches, find_negative_keyword
 
@@ -15,7 +15,10 @@ class AUScraperAgent:
     BASE_URL = "https://au.int"
     BIDS_URL = "https://au.int/en/bids"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -56,16 +59,17 @@ class AUScraperAgent:
                         continue
 
                     if release_date:
-                        if not is_within_24h_ist(release_date):
+                        if not is_date_or_deadline_valid(release_date, max_age_hours):
                             n_stale += 1
-                            log(f"   📅 Skipping '{title[:55]}' — matched, but posted {release_date} (>24h ago)")
+                            log(f"   📅 Skipping '{title[:55]}' — date/deadline {release_date} expired")
                             continue
+                        log(f"   ✅ Date / Active Deadline OK: {release_date}")
                     else:
                         n_no_date += 1
                         log(f"   ⚠️ No date in URL for '{title[:55]}' — skipping")
                         continue
 
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
@@ -73,7 +77,7 @@ class AUScraperAgent:
                     n_opened += 1
                     log(f"   📄 Opening: {title[:70]}")
                     base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "au"
-                    rec = self._extract_tender(ctx, url, keyword, title, release_date, base, log, db)
+                    rec = self._extract_tender(ctx, url, keyword, title, release_date, base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
@@ -162,7 +166,7 @@ class AUScraperAgent:
         return bids
 
     def _extract_tender(self, ctx, url: str, keyword: str, list_title: str,
-                        release_date: str, base_dir: Path, log, db=None) -> dict | None:
+                        release_date: str, base_dir: Path, log, db=None, team_id: str = "cnk") -> dict | None:
         detail_page = ctx.new_page()
         try:
             detail_page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -188,7 +192,7 @@ class AUScraperAgent:
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "au", keyword, release_date)
+                    db.mark_downloaded(title, url, "au", keyword, release_date, team_id=team_id)
                 return None
 
             # Extract bid number and deadline from <p> tags
@@ -255,7 +259,7 @@ class AUScraperAgent:
                     log(f"      📝 Page text saved alongside documents")
 
             if db:
-                db.mark_downloaded(title, url, "au", keyword, release_date)
+                db.mark_downloaded(title, url, "au", keyword, release_date, team_id=team_id)
 
             return {
                 "keyword":      keyword,

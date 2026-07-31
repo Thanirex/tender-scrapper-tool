@@ -35,19 +35,28 @@ def now_ist_naive() -> datetime:
     return datetime.now(tz=IST).replace(tzinfo=None)
 
 
-def is_within_24h_ist(date_str: str) -> bool:
+def get_max_age_hours(team_id: str | None = "cnk") -> int:
+    """Return maximum publication age in hours based on team_id.
+    TMI team gets 168 hours (7 days / 1 week).
+    CNK team (and default) gets 24 hours (1 day).
     """
-    Return True if date_str falls within the last 24 hours from now (IST).
+    if team_id and str(team_id).lower() == "tmi":
+        return 168
+    return 24
 
-    - Full datetime strings: exact window [now-24h, now].
+
+def is_within_cutoff_ist(date_str: str, max_age_hours: int = 24) -> bool:
+    """
+    Return True if date_str falls within max_age_hours from now (IST).
+
+    - Full datetime strings: exact window [now - max_age_hours, now].
     - Date-only strings: accepted if cutoff.date() <= date <= today (IST).
-      Practically: today OR yesterday, depending on when the run executes.
     """
     if not date_str:
         return False
     cleaned = date_str.strip()
     now    = now_ist()
-    cutoff = now - timedelta(hours=24)
+    cutoff = now - timedelta(hours=max_age_hours)
 
     # Try fromisoformat first — handles microseconds, +HH:MM offsets, etc.
     try:
@@ -76,6 +85,55 @@ def is_within_24h_ist(date_str: str) -> bool:
         except ValueError:
             continue
 
+    return False
+
+
+def is_within_24h_ist(date_str: str) -> bool:
+    """Return True if date_str falls within the last 24 hours from now (IST)."""
+    return is_within_cutoff_ist(date_str, max_age_hours=24)
+
+
+def is_deadline_active(date_str: str) -> bool:
+    """Return True if date_str represents a deadline that is today or in the future (IST).
+    If date_str cannot be parsed, returns True to avoid missing valid tenders.
+    """
+    if not date_str:
+        return True
+    cleaned = re.sub(r'^(?:deadline|post deadline|due date|closing date)[:\s]*', '', date_str.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(r'\.', '', cleaned).strip()  # e.g., "07 Aug. 2026" -> "07 Aug 2026"
+    now_date = now_ist().date()
+
+    for fmt in _DATE_FORMATS:
+        try:
+            d = datetime.strptime(cleaned, fmt).date()
+            return d >= now_date
+        except ValueError:
+            continue
+
+    try:
+        m = re.search(r'(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})', cleaned)
+        if m:
+            day, month, year = int(m.group(1)), m.group(2), int(m.group(3))
+            for fmt_m in ["%b", "%B"]:
+                try:
+                    dt = datetime.strptime(f"{day} {month} {year}", f"%d {fmt_m} %Y").date()
+                    return dt >= now_date
+                except ValueError:
+                    pass
+    except Exception:
+        pass
+
+    return True
+
+
+def is_date_or_deadline_valid(date_str: str, max_age_hours: int = 24) -> bool:
+    """Return True if date_str is either within max_age_hours publication window OR is an active future deadline."""
+    if not date_str:
+        return False
+    if is_within_cutoff_ist(date_str, max_age_hours):
+        return True
+    if is_deadline_active(date_str):
+        return True
     return False
 
 

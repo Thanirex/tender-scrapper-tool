@@ -225,22 +225,22 @@ class TenderDB:
             pass
 
     def _url_idx(self, conn: _Conn, name: str, table: str):
-        """Create the unique index on the url column.
-
-        MySQL does not support partial/conditional indexes, so no WHERE clause is used.
+        """Create the unique index on (url, team_id).
         SQLite and PostgreSQL use a partial index to allow multiple NULL / empty URLs.
-        Since the codebase now stores NULL (not '') for missing URLs, the partial index
-        is still correct for those backends.
         """
         try:
+            try:
+                conn.execute(f"DROP INDEX IF EXISTS {name}")
+            except Exception:
+                pass
             if _IS_MYSQL:
                 conn.execute(
-                    f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (url)"
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (url, team_id)"
                 )
             else:
                 conn.execute(
                     f"CREATE UNIQUE INDEX IF NOT EXISTS {name} "
-                    f"ON {table} (url) WHERE url IS NOT NULL AND url != ''"
+                    f"ON {table} (url, team_id) WHERE url IS NOT NULL AND url != ''"
                 )
         except Exception:
             pass
@@ -420,7 +420,7 @@ class TenderDB:
             conn.execute(_insert_ignore("teams", "slug, name, created_at", "?, ?, ?"), ("tmi", "TMI", "2026-01-01"))
 
             # ── Auto-migrate team_id column onto all primary tables ────────
-            for _tbl in ("users", "search_sessions", "found_tenders", "cron_runs", "cron_tenders", "activity_logs"):
+            for _tbl in ("users", "search_sessions", "found_tenders", "cron_runs", "cron_tenders", "activity_logs", "downloaded_tenders", "cron_dedup"):
                 self._add_col(conn, _tbl, "team_id", f"{_ENUM_TEXT} DEFAULT 'cnk'")
             self._add_col(conn, "users", "team_name", f"{_ENUM_TEXT} DEFAULT 'CNK'")
 
@@ -458,32 +458,34 @@ class TenderDB:
 
     # ── Dedup ──────────────────────────────────────────────────────────────────
 
-    def is_duplicate(self, title: str, url: str = "") -> bool:
+    def is_duplicate(self, title: str, url: str = "", team_id: str = "cnk") -> bool:
         with self._connect() as conn:
+            tid = team_id or "cnk"
             if url:
                 row = conn.execute(
-                    "SELECT 1 FROM downloaded_tenders WHERE url = ? LIMIT 1", (url,)
+                    "SELECT 1 FROM downloaded_tenders WHERE url = ? AND team_id = ? LIMIT 1", (url, tid)
                 ).fetchone()
                 if row:
                     return True
             norm = _normalize(title)
             row = conn.execute(
-                "SELECT 1 FROM downloaded_tenders WHERE title_norm = ? LIMIT 1", (norm,)
+                "SELECT 1 FROM downloaded_tenders WHERE title_norm = ? AND team_id = ? LIMIT 1", (norm, tid)
             ).fetchone()
             return row is not None
 
     def mark_downloaded(self, title: str, url: str, site: str,
-                        keyword: str, published_date: str = ""):
+                        keyword: str, published_date: str = "", team_id: str = "cnk"):
         norm = _normalize(title)
         now  = now_ist_naive().isoformat(timespec="seconds")
+        tid  = team_id or "cnk"
         with self._connect() as conn:
             conn.execute(
                 _insert_ignore(
                     "downloaded_tenders",
-                    "title_norm, url, site, keyword, published_date, downloaded_at",
-                    "?, ?, ?, ?, ?, ?",
+                    "title_norm, url, site, keyword, published_date, downloaded_at, team_id",
+                    "?, ?, ?, ?, ?, ?, ?",
                 ),
-                (norm, url or None, site or "", keyword or "", published_date or "", now),
+                (norm, url or None, site or "", keyword or "", published_date or "", now, tid),
             )
 
     # ── User management ────────────────────────────────────────────────────────
@@ -916,31 +918,33 @@ class TenderDB:
             )
             return cur.lastrowid
 
-    def is_cron_duplicate(self, title: str, url: str = "") -> bool:
+    def is_cron_duplicate(self, title: str, url: str = "", team_id: str = "cnk") -> bool:
         with self._connect() as conn:
+            tid = team_id or "cnk"
             if url:
                 row = conn.execute(
-                    "SELECT 1 FROM cron_dedup WHERE url = ? LIMIT 1", (url,)
+                    "SELECT 1 FROM cron_dedup WHERE url = ? AND team_id = ? LIMIT 1", (url, tid)
                 ).fetchone()
                 if row:
                     return True
             norm = _normalize(title)
             return bool(conn.execute(
-                "SELECT 1 FROM cron_dedup WHERE title_norm = ? LIMIT 1", (norm,)
+                "SELECT 1 FROM cron_dedup WHERE title_norm = ? AND team_id = ? LIMIT 1", (norm, tid)
             ).fetchone())
 
     def mark_cron_seen(self, title: str, url: str, site: str,
-                       keyword: str, published_date: str = ""):
+                       keyword: str, published_date: str = "", team_id: str = "cnk"):
         norm = _normalize(title)
         now  = now_ist_naive().isoformat(timespec="seconds")
+        tid  = team_id or "cnk"
         with self._connect() as conn:
             conn.execute(
                 _insert_ignore(
                     "cron_dedup",
-                    "title_norm, url, site, keyword, published_date, found_at",
-                    "?, ?, ?, ?, ?, ?",
+                    "title_norm, url, site, keyword, published_date, found_at, team_id",
+                    "?, ?, ?, ?, ?, ?, ?",
                 ),
-                (norm, url or None, site or "", keyword or "", published_date or "", now),
+                (norm, url or None, site or "", keyword or "", published_date or "", now, tid),
             )
 
     def get_cron_run(self, run_id: int) -> "dict | None":
@@ -1208,13 +1212,14 @@ class TenderDB:
 class CronDBProxy:
     """Wraps TenderDB so scraper agents use cron-specific dedup tables."""
 
-    def __init__(self, db: TenderDB, run_id: int):
-        self._db    = db
-        self.run_id = run_id
+    def __init__(self, db: TenderDB, run_id: int, team_id: str = "cnk"):
+        self._db     = db
+        self.run_id  = run_id
+        self.team_id = team_id or "cnk"
 
     def is_duplicate(self, title: str, url: str = "") -> bool:
-        return self._db.is_cron_duplicate(title, url)
+        return self._db.is_cron_duplicate(title, url, team_id=self.team_id)
 
     def mark_downloaded(self, title: str, url: str, site: str,
                         keyword: str, published_date: str = ""):
-        self._db.mark_cron_seen(title, url, site, keyword, published_date)
+        self._db.mark_cron_seen(title, url, site, keyword, published_date, team_id=self.team_id)

@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from date_utils import is_within_24h_ist
+from date_utils import is_within_24h_ist, get_max_age_hours, is_date_or_deadline_valid
 from keyword_utils import keyword_matches, find_negative_keyword
 
 # ReliefWeb job river pages are server-rendered (Drupal) — plain HTTP works,
@@ -35,7 +35,10 @@ class ReliefWebScraperAgent:
     BASE_URL = "https://reliefweb.int"
     LIST_URL = "https://reliefweb.int/jobs"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -44,7 +47,7 @@ class ReliefWebScraperAgent:
 
         results = []
         log(f"🔍 [ReliefWeb] Searching jobs for '{keyword}' — walking every result page; "
-            f"only postings from the last 24 hours are collected")
+            f"only postings from the last {max_age_hours} hours are collected")
 
         base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "reliefweb"
         seen_urls:  set = set()
@@ -92,19 +95,19 @@ class ReliefWebScraperAgent:
                 # detail page.  Only trusted when the card exposes a real
                 # (non-midnight) timestamp — the detail page re-checks anyway.
                 listed = card.get("posted", "")
-                if listed and not is_within_24h_ist(listed):
+                if listed and not is_date_or_deadline_valid(listed, max_age_hours):
                     n_stale += 1
-                    log(f"   📅 Skipping '{title[:60]}' — matched, but posted {listed[:10]} (>24h ago)")
+                    log(f"   📅 Skipping '{title[:60]}' — date {listed[:10]} expired")
                     continue
 
-                if db and db.is_duplicate(title, url):
+                if db and db.is_duplicate(title, url, team_id=team_id):
                     n_dup += 1
                     log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                     continue
 
                 n_opened += 1
                 log(f"   📄 Opening: {title[:70]}")
-                rec = self._extract_detail(url, keyword, title, base, log, db)
+                rec = self._extract_detail(url, keyword, title, base, log, db, max_age_hours=max_age_hours, team_id=team_id)
                 if rec:
                     results.append(rec)
                     if on_result_ready:
@@ -188,7 +191,7 @@ class ReliefWebScraperAgent:
 
     # ── Detail page ─────────────────────────────────────────────────────────
 
-    def _extract_detail(self, url, keyword, list_title, base_dir, log, db=None):
+    def _extract_detail(self, url, keyword, list_title, base_dir, log, db=None, max_age_hours: int = 24, team_id: str = "cnk"):
         try:
             resp = requests.get(url, headers=_HEADERS, timeout=45)
             resp.raise_for_status()
@@ -207,13 +210,14 @@ class ReliefWebScraperAgent:
         posted  = self._dt_field(page, "Posted")
         closing = self._dt_field(page, "Closing date")
 
-        # ── 24-hour publication check (authoritative) ────────────────────
-        if posted:
-            if not is_within_24h_ist(posted):
-                log(f"      📅 Skipping '{title[:60]}' — posted {posted[:10]} (>24h ago)")
+        # ── Publication / Deadline check (authoritative) ────────────────────
+        date_to_check = closing if closing else posted
+        if date_to_check:
+            if not is_date_or_deadline_valid(date_to_check, max_age_hours):
+                log(f"      📅 Skipping '{title[:60]}' — date/deadline {date_to_check[:10]} expired")
                 return None
         else:
-            log(f"      ⚠️ No posted date found for '{title[:60]}' — skipping")
+            log(f"      ⚠️ No date found for '{title[:60]}' — skipping")
             return None
 
         body_text = self._page_text(page)
@@ -222,10 +226,10 @@ class ReliefWebScraperAgent:
         if neg:
             log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
             if db:
-                db.mark_downloaded(title, url, "reliefweb", keyword, posted)
+                db.mark_downloaded(title, url, "reliefweb", keyword, posted, team_id=team_id)
             return None
 
-        if db and db.is_duplicate(title, url):
+        if db and db.is_duplicate(title, url, team_id=team_id):
             log(f"      ⏩ Duplicate: {title[:60]}")
             return None
 

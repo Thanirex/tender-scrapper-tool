@@ -1,3 +1,4 @@
+
 {
     "devnet": {
         "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
@@ -17,5 +18,11 @@
         "url": "https://www.nasscomfoundation.org/requestproposal",
         "scraper_type": "nasscom",
         "skip_date_filter": true
+    },
+    "ngobox": {
+        "url": "https://ngobox.org/rfp_eoi_listing.php",
+        "scraper_type": "ngobox",
+        "display_name": "NGOBOX (RFPs & EOIs)",
+        "skip_date_filter": false
     }
 }

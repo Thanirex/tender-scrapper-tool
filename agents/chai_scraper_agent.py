@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from date_utils import is_within_24h_ist, extract_date_from_text
+from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
 from keyword_utils import keyword_matches, find_negative_keyword
 
 # JS to collect RFP entries from the CHAI resource-center listing page.
@@ -48,7 +48,7 @@ _JS_LIST = """
         if (!published) {
             const cardText = el.textContent || '';
             const dm = cardText.match(
-                /\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4})\b/i
+                /\\b((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{1,2},?\\s+\\d{4}|\\d{1,2}\\s+(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\s+\\d{4})\\b/i
             );
             if (dm) published = dm[1].trim();
         }
@@ -86,7 +86,9 @@ class CHAIScraperAgent:
         "?_sft_category=rfp&sort_order=date+desc"
     )
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -144,22 +146,22 @@ class CHAIScraperAgent:
                     # skip early. If not (most sites won't have time[datetime] on
                     # cards), we defer the check to the detail page body text.
                     if published:
-                        if not is_within_24h_ist(published):
+                        if not is_date_or_deadline_valid(published, max_age_hours):
                             n_stale += 1
-                            log(f"   📅 Skipping '{title[:60]}' — matched, but published {published} (>24h ago)")
+                            log(f"   📅 Skipping '{title[:60]}' — date {published} expired")
                             continue
-                        log(f"   ✅ Date OK from listing: {published}")
+                        log(f"   ✅ Date / Active Deadline OK: {published}")
                     # No published date from listing → date check happens inside _extract_detail
 
                     # ── Dedup check ─────────────────────────────────────────
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
                     n_opened += 1
                     log(f"   📄 Opening: {title[:70]}")
-                    rec = self._extract_detail(ctx, url, keyword, title, published, base, log, db)
+                    rec = self._extract_detail(ctx, url, keyword, title, published, base, log, db, max_age_hours=max_age_hours, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
@@ -182,7 +184,7 @@ class CHAIScraperAgent:
 
     # ── Detail page extraction ─────────────────────────────────────────────
 
-    def _extract_detail(self, ctx, url, keyword, title, published, base_dir, log, db=None):
+    def _extract_detail(self, ctx, url, keyword, title, published, base_dir, log, db=None, max_age_hours: int = 24, team_id: str = "cnk"):
         detail = ctx.new_page()
         try:
             detail.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -229,10 +231,10 @@ class CHAIScraperAgent:
                     published = m.group(1).strip()
 
             if published:
-                if not is_within_24h_ist(published):
-                    log(f"      📅 Skipping '{title[:60]}' — published {published} (>24h ago)")
+                if not is_date_or_deadline_valid(published, max_age_hours):
+                    log(f"      📅 Skipping '{title[:60]}' — date {published} expired")
                     return None
-                log(f"      ✅ Date OK: {published}")
+                log(f"      ✅ Date / Active Deadline OK: {published}")
             else:
                 log(f"      ⚠️ Could not find a publication date for '{title[:60]}' — skipping to be safe")
                 return None

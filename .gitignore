@@ -10,6 +10,7 @@ __pycache__/
 .Python
 
 # ── Scraped Data & Downloads ───────────────────────────────────────────────
+downloads/
 data/downloads/
 data/outputs/
 

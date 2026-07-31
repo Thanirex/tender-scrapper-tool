@@ -9,7 +9,7 @@ from playwright.sync_api import sync_playwright
 # Resolve paths / utils from app root regardless of cwd
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from date_utils import is_within_24h_ist, extract_date_from_text
+from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
 from keyword_utils import keyword_matches, find_negative_keyword
 
 
@@ -67,7 +67,10 @@ class ScraperAgent:
             return None
         return extract_date_from_text(body_text)
 
-    def search(self, site_key, keyword, log_callback=None, on_result_ready=None, db=None):
+    def search(self, site_key, keyword, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -148,6 +151,7 @@ class ScraperAgent:
 
                             links[i].click()
                             page.wait_for_load_state("networkidle")
+
                         current_url = page.url
 
                         # DevNet uses ASP.NET postbacks — page.url never changes after click.
@@ -226,7 +230,7 @@ class ScraperAgent:
                             n_neg += 1
                             log(f"   🚫 Rejected '{title[:55]}' — negative keyword '{neg}' in description")
                             if db:
-                                db.mark_downloaded(title, current_url, site_key, keyword, "")
+                                db.mark_downloaded(title, current_url, site_key, keyword, "", team_id=team_id)
                             continue
 
                         # ── Date filter ──────────────────────────────────────────
@@ -239,17 +243,18 @@ class ScraperAgent:
                         else:
                             pub_date = self._extract_pub_date(page, site)
                             if pub_date:
-                                if not is_within_24h_ist(pub_date):
+                                if not is_date_or_deadline_valid(pub_date, max_age_hours):
                                     n_stale += 1
-                                    log(f"   📅 Skipping '{title[:55]}' — matched, but published {pub_date} (>24h ago)")
+                                    log(f"   📅 Skipping '{title[:55]}' — date {pub_date} expired (outside publication window & past deadline)")
                                     continue
+                                log(f"   ✅ Date / Active Deadline OK: {pub_date}")
                             else:
                                 n_no_date += 1
                                 log(f"   ⚠️ No publication date found for '{title[:55]}' — skipping")
                                 continue
 
                         # ── Deduplication check ──────────────────────────────────
-                        if db and db.is_duplicate(title, current_url):
+                        if db and db.is_duplicate(title, current_url, team_id=team_id):
                             n_dup += 1
                             log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                             continue
