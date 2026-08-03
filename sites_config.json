@@ -140,5 +140,11 @@
         "scraper_type": "idi",
         "display_name": "IDI Tenders & Calls for Proposals",
         "skip_date_filter": true
+    },
+    "lic": {
+        "url": "https://licindia.in/tenders",
+        "scraper_type": "lic",
+        "display_name": "LIC Tenders (Life Insurance Corporation)",
+        "skip_date_filter": false
     }
 }

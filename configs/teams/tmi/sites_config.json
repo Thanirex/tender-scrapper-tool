@@ -24,5 +24,11 @@
         "scraper_type": "ngobox",
         "display_name": "NGOBOX (RFPs & EOIs)",
         "skip_date_filter": false
+    },
+    "lic": {
+        "url": "https://licindia.in/tenders",
+        "scraper_type": "lic",
+        "display_name": "LIC Tenders (Life Insurance Corporation)",
+        "skip_date_filter": false
     }
 }
