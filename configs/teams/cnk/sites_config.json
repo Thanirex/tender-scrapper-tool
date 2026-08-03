@@ -134,5 +134,11 @@
         "scraper_type": "ngobox",
         "display_name": "NGOBOX (RFPs & EOIs)",
         "skip_date_filter": false
+    },
+    "idi": {
+        "url": "https://idi.no/get-involved/tenders/",
+        "scraper_type": "idi",
+        "display_name": "IDI Tenders & Calls for Proposals",
+        "skip_date_filter": true
     }
 }
