@@ -1428,7 +1428,7 @@ def run_daily_job(team_id: str = "cnk"):
                             _db.record_cron_tender(
                                 run_id=run_id, keyword=_kw, title=title,
                                 url=res.get("url", ""), site=_site,
-                                published_date=res.get("deadline", ""), summary=fields,
+                                published_date=res.get("published_date") or res.get("startDate") or res.get("deadline", ""), summary=fields,
                                 tender_dir=tender_dir_rel, team_id=team_id,
                             )
                             total_tenders += 1
