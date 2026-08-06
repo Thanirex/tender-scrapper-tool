@@ -19,7 +19,10 @@ class WorldBankScraperAgent:
     BASE_URL = "https://wbgeprocure-rfxnow.worldbank.org"
     LIST_URL = "https://wbgeprocure-rfxnow.worldbank.org/rfxnow/public/advertisement/index.html"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_items = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -29,53 +32,51 @@ class WorldBankScraperAgent:
         results = []
         log(f"🔍 [World Bank] Scanning for '{keyword}'...")
 
+        if self._cached_items is not None:
+            items = self._cached_items
+            log(f"   ↳ {len(items)} procurement listing(s) (using cached listing)")
+        else:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
+                try:
+                    page.goto(self.LIST_URL, wait_until="domcontentloaded", timeout=60000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=20000)
+                    except PlaywrightTimeout:
+                        pass
+                    page.wait_for_timeout(3000)
+
+                    items = self._collect_all_items(page, log)
+                    self._cached_items = items
+                    log(f"   ↳ {len(items)} procurement listing(s) found")
+                except Exception as e:
+                    log(f"❌ [World Bank] Listing fetch error: {e}")
+                    items = []
+                finally:
+                    browser.close()
+
+        base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "worldbank"
+        skipped = 0
+        n_neg = n_dup = n_opened = 0
+
+        # We need a Playwright context for detail extraction if we aren't already in the loop
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(
-                accept_downloads=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = ctx.new_page()
+            ctx = browser.new_context(accept_downloads=True)
             try:
-                page.goto(self.LIST_URL, wait_until="domcontentloaded", timeout=60000)
-                try:
-                    page.wait_for_load_state("networkidle", timeout=20000)
-                except PlaywrightTimeout:
-                    pass
-                page.wait_for_timeout(3000)
-
-                items = self._collect_all_items(page, log)
-                log(f"   ↳ {len(items)} procurement listing(s) found")
-
-                # Show a sample so misconfigurations are obvious in the log
-                for item in items[:5]:
-                    log(f"   • title='{item['title'][:60]}' url='{item['url'][:80]}'")
-
-                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "worldbank"
-                skipped = 0
-                n_neg = n_dup = n_opened = 0
-
                 for item in items:
+                    title    = item["title"]
                     url      = item["url"]
-                    raw_text = item.get("row_text", "").strip()
-
-                    # If the link text is a generic placeholder ("view","details","click",
-                    # a reference code ≤15 chars, etc.) use the full row text as the title
-                    link_title = item["title"].strip()
-                    _generic   = {"view", "details", "click here", "open", "download", "select"}
-                    if (not link_title
-                            or link_title.lower() in _generic
-                            or len(link_title) <= 15):
-                        title = raw_text[:120] or link_title
-                    else:
-                        title = link_title
-
-                    if not title or not url:
-                        continue
+                    raw_text = item.get("row_text", "")
 
                     # Keyword match against full row text (covers all columns)
                     searchable = raw_text if raw_text else title
@@ -83,13 +84,13 @@ class WorldBankScraperAgent:
                         skipped += 1
                         continue
 
-                    neg = find_negative_keyword(title, searchable)
+                    neg = find_negative_keyword(title, searchable, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
                         continue
 
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
@@ -287,7 +288,7 @@ class WorldBankScraperAgent:
     # ── Detail extraction ──────────────────────────────────────────────────
 
     def _extract_detail(self, ctx, url: str, keyword: str, list_title: str,
-                        base_dir: Path, log, db=None) -> "dict | None":
+                        base_dir: Path, log, db=None, team_id: str = "cnk") -> "dict | None":
         detail_page = ctx.new_page()
         try:
             detail_page.goto(url, wait_until="domcontentloaded", timeout=60000)
@@ -303,7 +304,7 @@ class WorldBankScraperAgent:
                 try:
                     el = detail_page.locator(sel).first
                     t  = el.text_content(timeout=3000).strip()
-                    if t and len(t) > 5:
+                    if t and len(t) > 10 and t.lower() not in ("view", "details"):
                         title = t
                         break
                 except Exception:
@@ -317,11 +318,11 @@ class WorldBankScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "worldbank", keyword, "")
+                    db.mark_downloaded(title, url, "worldbank", keyword, "", team_id=team_id)
                 return None
 
             # Collect document download URLs (template placeholders and .html routes filtered out)

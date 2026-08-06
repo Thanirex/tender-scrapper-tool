@@ -12,31 +12,53 @@ import re
 from pathlib import Path
 
 
-def _build_pattern(keyword: str) -> "re.Pattern | None":
+def _build_patterns(keyword: str) -> list:
     kw = (keyword or "").strip()
     if not kw:
-        return None
-    # Escape the keyword, then let any run of whitespace in a multi-word
-    # keyword match flexible whitespace/hyphens in the text.
-    escaped = re.escape(kw)
-    escaped = re.sub(r"(\\\s|\s)+", r"[\\s\\-]+", escaped)
-    # (?<!\w) / (?!\w) instead of \b so keywords that start or end with a
-    # non-word character (e.g. ".NET") still anchor correctly.
-    return re.compile(r"(?<!\w)" + escaped + r"(?!\w)", re.IGNORECASE)
+        return []
+
+    candidates = [kw]
+    # If keyword has parenthetical abbreviation e.g. "Learning Management System (LMS)"
+    paren_match = re.search(r"^(.+?)\s*\((.+?)\)$", kw)
+    if paren_match:
+        full_part = paren_match.group(1).strip()
+        abbr_part = paren_match.group(2).strip()
+        if full_part:
+            candidates.append(full_part)
+        if abbr_part:
+            candidates.append(abbr_part)
+
+    # If keyword has slash e.g. "eLearning Platform / Digital Learning Solution"
+    if "/" in kw:
+        parts = [p.strip() for p in re.split(r"\s*/\s*", kw) if p.strip()]
+        candidates.extend(parts)
+
+    patterns = []
+    seen = set()
+    for cand in candidates:
+        if cand.lower() in seen:
+            continue
+        seen.add(cand.lower())
+        escaped = re.escape(cand)
+        escaped = re.sub(r"(\\\s|\s)+", r"[\\s\\-]+", escaped)
+        p = re.compile(r"(?<!\w)" + escaped + r"(?!\w)", re.IGNORECASE)
+        patterns.append(p)
+
+    return patterns
 
 
 def keyword_matches(keyword: str, *texts: str) -> bool:
-    """True if the keyword appears as a whole word/phrase in any given text."""
-    pattern = _build_pattern(keyword)
-    if pattern is None:
+    """True if the keyword (or any of its primary sub-phrases) appears as a whole word/phrase in any given text."""
+    patterns = _build_patterns(keyword)
+    if not patterns:
         return False
-    return any(pattern.search(t) for t in texts if t)
+    return any(p.search(t) for p in patterns for t in texts if t)
 
 
 # ── Negative keywords ────────────────────────────────────────────────────────
 
 _NEG_FILE = Path(__file__).parent / "negative_keywords.json"
-_neg_cache = {"mtime": None, "title_only": [], "anywhere": []}
+_neg_cache = {}
 
 
 def _compile_list(keywords) -> list:
@@ -44,52 +66,59 @@ def _compile_list(keywords) -> list:
     for kw in keywords or []:
         if not isinstance(kw, str):
             continue
-        pattern = _build_pattern(kw)
-        if pattern is not None:
+        patterns = _build_patterns(kw)
+        for pattern in patterns:
             compiled.append((kw.strip(), pattern))
     return compiled
 
 
-def _load_negative_keywords() -> dict:
-    """Load negative_keywords.json, recompiling only when the file changes.
+def _load_negative_keywords(team_id: str = "cnk") -> dict:
+    """Load team-specific negative_keywords.json, recompiling when the file changes.
 
-    Accepts {"title_only": [...], "anywhere": [...]} or a plain list
-    (treated as title_only).  A missing or unparsable file disables the
-    filter rather than blocking scrapes.
+    Accepts {"title_only": [...], "anywhere": [...]} or a plain list.
+    Falls back to root negative_keywords.json if team file doesn't exist.
     """
+    tid = (team_id or "cnk").strip().lower()
+    team_neg_file = Path(__file__).parent / "configs" / "teams" / tid / "negative_keywords.json"
+    target_file = team_neg_file if team_neg_file.exists() else _NEG_FILE
+
     try:
-        mtime = _NEG_FILE.stat().st_mtime
+        mtime = target_file.stat().st_mtime
     except OSError:
         return {"title_only": [], "anywhere": []}
 
-    if _neg_cache["mtime"] != mtime:
+    cache_entry = _neg_cache.get(tid, {})
+    if cache_entry.get("mtime") != mtime:
         try:
-            with open(_NEG_FILE, "r", encoding="utf-8") as f:
+            with open(target_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             data = {}
         if isinstance(data, list):
             data = {"title_only": data}
-        _neg_cache["title_only"] = _compile_list(data.get("title_only"))
-        _neg_cache["anywhere"]   = _compile_list(data.get("anywhere"))
-        _neg_cache["mtime"] = mtime
-    return _neg_cache
+        cache_entry = {
+            "title_only": _compile_list(data.get("title_only")),
+            "anywhere":   _compile_list(data.get("anywhere")),
+            "mtime":      mtime,
+        }
+        _neg_cache[tid] = cache_entry
+
+    return cache_entry
 
 
-def find_negative_keyword(title: str, *detail_texts: str) -> "str | None":
+def find_negative_keyword(title: str, *detail_texts: str, team_id: str = "cnk") -> "str | None":
     """Return the negative keyword that disqualifies this tender, else None.
 
     The title is checked against both scopes; detail texts (description,
-    full page text) only against the "anywhere" scope, so generic
-    title-only words can't be tripped by nav menus or boilerplate.
+    full page text) only against the "anywhere" scope.
     """
-    neg = _load_negative_keywords()
+    neg = _load_negative_keywords(team_id)
     if title:
-        for kw, pattern in neg["title_only"]:
+        for kw, pattern in neg.get("title_only", []):
             if pattern.search(title):
                 return kw
     texts = [t for t in (title, *detail_texts) if t]
-    for kw, pattern in neg["anywhere"]:
+    for kw, pattern in neg.get("anywhere", []):
         if any(pattern.search(t) for t in texts):
             return kw
     return None

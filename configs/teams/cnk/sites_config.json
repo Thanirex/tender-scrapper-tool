@@ -94,7 +94,7 @@
         "skip_date_filter": true
     },
     "gatsbyafrica": {
-        "url": "https://www.gatsbyafrica.org.uk/tender/",
+        "url": "https://gatsbyafrica.org.uk/vacancies-tenders/",
         "scraper_type": "gatsbyafrica",
         "display_name": "Gatsby Africa Tenders",
         "skip_date_filter": true

@@ -44,6 +44,9 @@ class DRCScraperAgent:
     BASE_URL    = "https://drc.ngo"
     LISTING_URL = "https://drc.ngo/en/tenders/"
 
+    def __init__(self):
+        self._cached_rows = None
+
     def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
         if max_age_hours is None:
             max_age_hours = get_max_age_hours(team_id)
@@ -57,92 +60,119 @@ class DRCScraperAgent:
         results = []
         log(f"🔍 [DRC] Scanning for '{keyword}'...")
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            ctx     = browser.new_context(
-                accept_downloads=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = ctx.new_page()
-            try:
-                page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=45000)
+        if self._cached_rows is not None:
+            rows = self._cached_rows
+            log(f"   ↳ {len(rows)} tender row(s) (using cached listing)")
+        else:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx     = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
                 try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except PlaywrightTimeout:
-                    pass
-                page.wait_for_timeout(1500)
+                    page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=45000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                    except PlaywrightTimeout:
+                        pass
+                    page.wait_for_timeout(1500)
+                    rows = page.evaluate(_JS_LIST) or []
+                    self._cached_rows = rows
+                    log(f"   ↳ {len(rows)} tender row(s) on listing page")
+                except Exception as e:
+                    log(f"❌ [DRC] Listing fetch error: {e}")
+                    rows = []
+                finally:
+                    browser.close()
 
-                rows = page.evaluate(_JS_LIST) or []
-                log(f"   ↳ {len(rows)} tender row(s) on listing page")
+        base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "drc"
 
-                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "drc"
+        n_title_miss = n_neg = n_closed = n_stale = n_dup = n_opened = 0
+        for row in rows:
+            title     = row["title"]
+            url       = row["url"]
+            published = row["published"]
+            deadline  = row["deadline"]
+            status    = row.get("status", "")
 
-                n_title_miss = n_neg = n_closed = n_stale = n_dup = n_opened = 0
-                for row in rows:
-                    title     = row["title"]
-                    url       = row["url"]
-                    published = row["published"]
-                    deadline  = row["deadline"]
-                    status    = row.get("status", "")
+            # ── Keyword filter ────────────────────────────────────────
+            if not keyword_matches(keyword, title):
+                n_title_miss += 1
+                continue
 
-                    # ── Keyword filter ────────────────────────────────────────
-                    if not keyword_matches(keyword, title):
-                        n_title_miss += 1
-                        continue
+            neg = find_negative_keyword(title, team_id=team_id)
+            if neg:
+                n_neg += 1
+                log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
+                continue
 
-                    neg = find_negative_keyword(title)
-                    if neg:
-                        n_neg += 1
-                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
-                        continue
+            # ── Active check — skip archived/expired tenders ──────────
+            if status in ("archived", "expired", "closed"):
+                n_closed += 1
+                log(f"   ⏭ Skipping '{title[:60]}' — tender is {status}")
+                continue
 
-                    # ── Active check — skip archived/expired tenders ──────────
-                    if status in ("archived", "expired", "closed"):
-                        n_closed += 1
-                        log(f"   ⏭ Skipping '{title[:60]}' — tender is {status}")
-                        continue
+            # ── Publication / Deadline check ─────────────────────────
+            date_to_check = deadline if deadline else published
+            if date_to_check:
+                if not is_date_or_deadline_valid(date_to_check, max_age_hours):
+                    n_stale += 1
+                    log(f"   📅 Skipping '{title[:60]}' — date/deadline {date_to_check} expired")
+                    continue
+            else:
+                log(f"   ⚠️ No date found for '{title[:60]}' — processing anyway")
 
-                    # ── Publication / Deadline check ─────────────────────────
-                    date_to_check = deadline if deadline else published
-                    if date_to_check:
-                        if not is_date_or_deadline_valid(date_to_check, max_age_hours):
-                            n_stale += 1
-                            log(f"   📅 Skipping '{title[:60]}' — date/deadline {date_to_check} expired")
-                            continue
-                    else:
-                        log(f"   ⚠️ No date found for '{title[:60]}' — processing anyway")
+            # ── Dedup check ───────────────────────────────────────────
+            if db and db.is_duplicate(title, url, team_id=team_id):
+                n_dup += 1
+                log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                continue
 
-                    # ── Dedup check ───────────────────────────────────────────
-                    if db and db.is_duplicate(title, url, team_id=team_id):
-                        n_dup += 1
-                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
-                        continue
-
-                    n_opened += 1
-                    log(f"   📄 Opening: {title[:70]}")
+            n_opened += 1
+            # Detail extraction opens Playwright context only for matching row
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx     = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
+            log(f"   📄 Opening: {title[:70]}")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx     = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                )
+                try:
                     rec = self._extract_detail(ctx, url, keyword, title, published, deadline, base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+                finally:
+                    browser.close()
 
-                log(
-                    f"   📊 '{keyword}' summary on DRC: {len(rows)} tender(s) listed → "
-                    f"{n_title_miss} without the keyword in the title, "
-                    f"{n_neg} blocked by negative keywords, {n_closed} archived/expired, "
-                    f"{n_stale} older than 24h, {n_dup} already collected, "
-                    f"{n_opened} opened for full check, {len(results)} saved"
-                )
-
-            except Exception as e:
-                log(f"❌ DRC scrape error: {e}")
-            finally:
-                browser.close()
-
+        log(
+            f"   📊 '{keyword}' summary on DRC: {len(rows)} result(s) listed → "
+            f"{n_title_miss} without the keyword in the title, {n_neg} blocked by negative keywords, "
+            f"{n_stale} older than {max_age_hours}h, {n_closed} archived/expired, "
+            f"{n_dup} already collected, {len(results)} saved"
+        )
         return results
 
     # ── Detail page extraction ─────────────────────────────────────────────

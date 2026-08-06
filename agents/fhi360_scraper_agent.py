@@ -108,7 +108,10 @@ _JS_COLLECT = """
 class FHI360ScraperAgent:
     PAGE_URL = "https://solicitations.fhi360.org/Solicitation.aspx"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_solicitations = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -118,42 +121,42 @@ class FHI360ScraperAgent:
         results = []
         log(f"🔍 [FHI 360] Scanning for '{keyword}'...")
 
+        if self._cached_solicitations is not None:
+            solicitations = self._cached_solicitations
+            log(f"   ↳ {len(solicitations)} solicitation(s) (using cached listing)")
+        else:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
+                try:
+                    page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(2000)
+                    solicitations = self._collect_solicitations(page, log)
+                    self._cached_solicitations = solicitations
+                    log(f"   ↳ {len(solicitations)} solicitation(s) on page")
+                except Exception as e:
+                    log(f"❌ [FHI 360] Fetch error: {e}")
+                    solicitations = []
+                finally:
+                    browser.close()
+
+        base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "fhi360"
+
+        n_miss = n_neg = n_dup = 0
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
             try:
-                page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_timeout(2000)
-
-                diag = page.evaluate(_JS_DIAG)
-                log(
-                    f"   🔍 hr={diag.get('hrCount')} b={diag.get('bCount')} "
-                    f"strong={diag.get('strongCount')} links={diag.get('aCount')} | "
-                    f"hr-parent=<{diag.get('hrParentTag')} id='{diag.get('hrParentId')}' "
-                    f"class='{diag.get('hrParentCls', '')[:40]}'> | "
-                    f"first-b='{diag.get('firstB', '')}'"
-                )
-
-                solicitations = self._collect_solicitations(page, log)
-                log(f"   ↳ {len(solicitations)} solicitation(s) on page")
-
-                # Show sample so problems are immediately visible
-                for sol in solicitations[:3]:
-                    log(f"   • '{sol['title'][:65]}' | files={len(sol['links'])}")
-
-                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "fhi360"
-
-                n_miss = n_neg = n_dup = 0
                 for sol in solicitations:
                     title = sol["title"]
                     text  = sol["text"]
                     links = sol["links"]
 
-                    if not keyword_matches(keyword, title, text):
+                    if not keyword_matches(keyword, title):
                         n_miss += 1
                         continue
 
-                    neg = find_negative_keyword(title, text)
+                    neg = find_negative_keyword(title, text, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
@@ -161,7 +164,7 @@ class FHI360ScraperAgent:
 
                     url = links[0] if links else self.PAGE_URL
 
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue

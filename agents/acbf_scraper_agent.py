@@ -11,7 +11,10 @@ from keyword_utils import keyword_matches, find_negative_keyword
 class ACBFScraperAgent:
     PAGE_URL = "https://theacbf.org/join-us/procurement-and-consultancies/"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_items = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -21,61 +24,71 @@ class ACBFScraperAgent:
         results = []
         log(f"🔍 [ACBF] Scanning for '{keyword}'...")
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context()
-            page = ctx.new_page()
-            try:
-                page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_timeout(2000)
+        if self._cached_items is not None:
+            items = self._cached_items
+            log(f"   ↳ {len(items)} procurement item(s) (using cached listing)")
+        else:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context()
+                page = ctx.new_page()
+                try:
+                    page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+                    page.wait_for_timeout(2000)
+                    items = self._collect_items(page, log)
+                    self._cached_items = items
+                    log(f"   ↳ {len(items)} procurement item(s) found")
+                except Exception as e:
+                    log(f"❌ [ACBF] Fetch error: {e}")
+                    items = []
+                finally:
+                    browser.close()
 
-                items = self._collect_items(page, log)
-                log(f"   ↳ {len(items)} procurement item(s) found")
+        n_title_miss = n_neg = n_dup = n_opened = 0
+        base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "acbf"
 
-                n_title_miss = n_neg = n_dup = n_opened = 0
-                for item in items:
-                    title = item["title"]
-                    url   = item["url"]
+        for item in items:
+            title = item.get("title", "")
+            url   = item.get("url", "")
 
-                    if not title or not url:
-                        continue
+            if not title or not url:
+                continue
 
-                    if not keyword_matches(keyword, title):
-                        n_title_miss += 1
-                        continue
+            if not keyword_matches(keyword, title):
+                n_title_miss += 1
+                continue
 
-                    neg = find_negative_keyword(title)
-                    if neg:
-                        n_neg += 1
-                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
-                        continue
+            neg = find_negative_keyword(title, team_id=team_id)
+            if neg:
+                n_neg += 1
+                log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
+                continue
 
-                    if db and db.is_duplicate(title, url):
-                        n_dup += 1
-                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
-                        continue
+            if db and db.is_duplicate(title, url, team_id=team_id):
+                n_dup += 1
+                log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                continue
 
-                    n_opened += 1
-                    log(f"   📄 Opening: {title[:70]}")
-                    base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "acbf"
-                    rec = self._extract_detail(ctx, url, keyword, title, item.get("deadline", ""), base, log, db)
+            n_opened += 1
+            log(f"   📄 Opening: {title[:70]}")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context()
+                try:
+                    rec = self._extract_detail(ctx, url, keyword, title, item.get("deadline", ""), base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+                finally:
+                    browser.close()
 
-                log(
-                    f"   📊 '{keyword}' summary on ACBF: {len(items)} item(s) listed → "
-                    f"{n_title_miss} without the keyword in the title, "
-                    f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
-                    f"{n_opened} opened for full check, {len(results)} saved"
-                )
-
-            except Exception as e:
-                log(f"❌ ACBF scrape error: {e}")
-            finally:
-                browser.close()
-
+        log(
+            f"   📊 '{keyword}' summary on ACBF: {len(items)} item(s) listed → "
+            f"{n_title_miss} without the keyword in the title, "
+            f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+            f"{n_opened} opened for full check, {len(results)} saved"
+        )
         return results
 
     def _collect_items(self, page, log) -> list:
@@ -129,7 +142,7 @@ class ACBFScraperAgent:
         return [{"title": i["title"], "url": i["href"], "deadline": i["deadline"]} for i in items]
 
     def _extract_detail(self, ctx, url: str, keyword: str, list_title: str,
-                        deadline: str, base_dir: Path, log, db=None) -> dict | None:
+                        deadline: str, base_dir: Path, log, db=None, team_id: str = "cnk") -> dict | None:
         detail_page = ctx.new_page()
         try:
             detail_page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -151,11 +164,11 @@ class ACBFScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "acbf", keyword, deadline)
+                    db.mark_downloaded(title, url, "acbf", keyword, deadline, team_id=team_id)
                 return None
 
             log(f"      📋 {title[:70]}")
@@ -174,7 +187,7 @@ class ACBFScraperAgent:
                 log(f"      📝 Page content saved ({len(body_text):,} chars)")
 
             if db:
-                db.mark_downloaded(title, url, "acbf", keyword, deadline)
+                db.mark_downloaded(title, url, "acbf", keyword, deadline, team_id=team_id)
 
             return {
                 "keyword":    keyword,

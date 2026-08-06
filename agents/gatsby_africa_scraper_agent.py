@@ -6,14 +6,20 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
-from keyword_utils import keyword_matches, find_negative_keyword
+from keyword_utils import keyword_matches, find_negative_keyword, get_max_age_hours
 
 
 class GatsbyAfricaScraperAgent:
-    BASE_URL    = "https://www.gatsbyafrica.org.uk"
-    LISTING_URL = "https://www.gatsbyafrica.org.uk/tender/"
+    BASE_URL    = "https://gatsbyafrica.org.uk"
+    LISTING_URL = "https://gatsbyafrica.org.uk/vacancies-tenders/"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_all_tenders = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -35,7 +41,10 @@ class GatsbyAfricaScraperAgent:
             )
             page = ctx.new_page()
             try:
-                tenders = self._find_tenders(page, keyword, log)
+                if self._cached_all_tenders is not None:
+                    tenders = [t for t in self._cached_all_tenders if keyword_matches(keyword, t["title"])]
+                else:
+                    tenders = self._find_tenders(page, keyword, log)
                 log(f"   ↳ {len(tenders)} tender(s) matched '{keyword}'")
 
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "gatsbyafrica"
@@ -45,20 +54,20 @@ class GatsbyAfricaScraperAgent:
                     title = tender["title"]
                     url   = tender["url"]
 
-                    neg = find_negative_keyword(title)
+                    neg = find_negative_keyword(title, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                         continue
 
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
 
                     n_opened += 1
                     log(f"   📄 Opening: {title[:70]}")
-                    rec = self._extract_detail(ctx, url, keyword, title, base, log, db)
+                    rec = self._extract_detail(ctx, url, keyword, title, base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
@@ -209,7 +218,7 @@ class GatsbyAfricaScraperAgent:
 
     # ── Detail page extraction ─────────────────────────────────────────────
 
-    def _extract_detail(self, ctx, url, keyword, list_title, base_dir, log, db=None):
+    def _extract_detail(self, ctx, url, keyword, list_title, base_dir, log, db=None, team_id: str = "cnk"):
         detail_page = ctx.new_page()
         try:
             detail_page.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -238,11 +247,11 @@ class GatsbyAfricaScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "gatsbyafrica", keyword, "")
+                    db.mark_downloaded(title, url, "gatsbyafrica", keyword, "", team_id=team_id)
                 return None
 
             # All document links — PDFs from /app/uploads/ and any "RFP/download/view" links

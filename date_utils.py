@@ -127,9 +127,11 @@ def is_deadline_active(date_str: str) -> bool:
 
 
 def is_date_or_deadline_valid(date_str: str, max_age_hours: int = 24) -> bool:
-    """Return True if date_str is either within max_age_hours publication window OR is an active future deadline."""
-    if not date_str:
-        return False
+    """Return True if date_str is either within max_age_hours publication window OR is an active future deadline.
+    If no date string is provided/found, returns True so dedup handles repetition instead of silently dropping valid tenders.
+    """
+    if not date_str or not str(date_str).strip():
+        return True
     if is_within_cutoff_ist(date_str, max_age_hours):
         return True
     if is_deadline_active(date_str):

@@ -10,9 +10,12 @@ from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class TradeMarkAfricaScraperAgent:
-    API_URL = "https://trademarkafrica.com/wp-json/wp/v2/posts"
+    API_URL = "https://trademarkafrica.com/wp-json/wp/v2/procurement"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_posts = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -23,8 +26,13 @@ class TradeMarkAfricaScraperAgent:
         log(f"🔍 [TradeMark Africa] Scanning for '{keyword}'...")
 
         try:
-            posts = self._fetch_posts(keyword, log)
-            log(f"   ↳ {len(posts)} post(s) returned by API")
+            if self._cached_posts is not None:
+                posts = self._cached_posts
+                log(f"   ↳ {len(posts)} post(s) (using cached listing)")
+            else:
+                posts = self._fetch_posts(keyword, log)
+                self._cached_posts = posts
+                log(f"   ↳ {len(posts)} post(s) returned by API")
 
             n_title_miss = n_neg = n_dup = n_opened = 0
             for post in posts:
@@ -38,13 +46,13 @@ class TradeMarkAfricaScraperAgent:
                     n_title_miss += 1
                     continue
 
-                neg = find_negative_keyword(title)
+                neg = find_negative_keyword(title, team_id=team_id)
                 if neg:
                     n_neg += 1
                     log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
                     continue
 
-                if db and db.is_duplicate(title, url):
+                if db and db.is_duplicate(title, url, team_id=team_id):
                     n_dup += 1
                     log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                     continue
@@ -52,7 +60,7 @@ class TradeMarkAfricaScraperAgent:
                 n_opened += 1
                 log(f"   📄 Opening: {title[:70]}")
                 base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "trademarkafrica"
-                rec  = self._process_post(post, keyword, base, log, db)
+                rec  = self._process_post(post, keyword, base, log, db, team_id=team_id)
                 if rec:
                     results.append(rec)
                     if on_result_ready:
@@ -101,7 +109,7 @@ class TradeMarkAfricaScraperAgent:
             page += 1
         return posts
 
-    def _process_post(self, post: dict, keyword: str, base_dir: Path, log, db=None) -> dict | None:
+    def _process_post(self, post: dict, keyword: str, base_dir: Path, log, db=None, team_id: str = "cnk") -> dict | None:
         title   = html_mod.unescape(post.get("title",   {}).get("rendered", "")).strip()
         url     = post.get("link", "")
         content = post.get("content", {}).get("rendered", "")
@@ -119,11 +127,11 @@ class TradeMarkAfricaScraperAgent:
         if m:
             deadline = m.group(1).strip().rstrip(".")
 
-        neg = find_negative_keyword(title, body_text)
+        neg = find_negative_keyword(title, body_text, team_id=team_id)
         if neg:
             log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' in post content")
             if db:
-                db.mark_downloaded(title, url, "trademarkafrica", keyword, deadline)
+                db.mark_downloaded(title, url, "trademarkafrica", keyword, deadline, team_id=team_id)
             return None
 
         # Extract all document URLs from raw HTML (PDF, DOCX, DOC, XLSX)

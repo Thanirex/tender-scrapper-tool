@@ -213,7 +213,7 @@ class ScraperAgent:
                             log(f"   🚫 Skipping '{title[:55]}' — keyword '{keyword}' not in title")
                             continue
 
-                        neg = find_negative_keyword(title)
+                        neg = find_negative_keyword(title, team_id=team_id)
                         if neg:
                             n_neg += 1
                             log(f"   🚫 Skipping '{title[:55]}' — negative keyword '{neg}' in title")
@@ -225,7 +225,7 @@ class ScraperAgent:
                             content = "Could not extract content."
 
                         # ── Negative keyword check on the description ────────────
-                        neg = find_negative_keyword(title, content)
+                        neg = find_negative_keyword(title, content, team_id=team_id)
                         if neg:
                             n_neg += 1
                             log(f"   🚫 Rejected '{title[:55]}' — negative keyword '{neg}' in description")

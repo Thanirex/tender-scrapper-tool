@@ -27,7 +27,13 @@ class JSIScraperAgent:
     BASE_URL    = "https://www.jsi.org"
     LISTING_URL = "https://www.jsi.org/partner-with-jsi/solicitations/"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def __init__(self):
+        self._cached_entries = None
+
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk", max_age_hours=None):
+        if max_age_hours is None:
+            max_age_hours = get_max_age_hours(team_id)
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -37,110 +43,113 @@ class JSIScraperAgent:
         results = []
         log(f"🔍 [JSI] Scanning for '{keyword}'...")
 
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            ctx = browser.new_context(
-                accept_downloads=True,
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-            )
-            page = ctx.new_page()
-            try:
-                page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=45000)
+        if self._cached_entries is not None:
+            entries = self._cached_entries
+            log(f"   ↳ {len(entries)} solicitation link(s) (using cached listing)")
+        else:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                )
+                page = ctx.new_page()
                 try:
-                    page.wait_for_load_state("networkidle", timeout=10000)
-                except PlaywrightTimeout:
-                    pass
-                page.wait_for_timeout(1500)
+                    page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=45000)
+                    try:
+                        page.wait_for_load_state("networkidle", timeout=10000)
+                    except PlaywrightTimeout:
+                        pass
+                    page.wait_for_timeout(1500)
+                    entries = page.evaluate("""
+                    () => {
+                        const BASE = "https://www.jsi.org";
+                        const seen = new Set();
+                        const results = [];
+                        document.querySelectorAll('a[href*="/solicitation/"]').forEach(a => {
+                            let href = a.getAttribute('href') || '';
+                            if (!href) return;
+                            if (href.replace(/\\/$/, '').endsWith('/solicitations')) return;
+                            if (href.startsWith('/')) href = BASE + href;
+                            if (seen.has(href)) return;
+                            seen.add(href);
 
-                # Collect all solicitation detail-page links + their visible title text
-                entries = page.evaluate("""
-                () => {
-                    const BASE = "https://www.jsi.org";
-                    const seen = new Set();
-                    const results = [];
-                    document.querySelectorAll('a[href*="/solicitation/"]').forEach(a => {
-                        let href = a.getAttribute('href') || '';
-                        if (!href) return;
-                        // Skip the listing root itself
-                        if (href.replace(/\\/$/, '').endsWith('/solicitations')) return;
-                        if (href.startsWith('/')) href = BASE + href;
-                        if (seen.has(href)) return;
-                        seen.add(href);
-
-                        // Title: prefer the link's own text; walk up for a heading if empty
-                        let title = a.textContent.trim();
-                        if (!title || title.length < 5) {
-                            let node = a.parentElement;
-                            for (let i = 0; i < 4 && node; i++) {
-                                const h = node.querySelector('h1,h2,h3,h4');
-                                if (h) { title = h.textContent.trim(); break; }
-                                // Also try the closest heading sibling text
-                                title = node.textContent.trim().split('\\n')[0].trim();
-                                if (title.length > 5) break;
-                                node = node.parentElement;
+                            let title = a.textContent.trim();
+                            if (!title || title.length < 5) {
+                                let node = a.parentElement;
+                                for (let i = 0; i < 4 && node; i++) {
+                                    const h = node.querySelector('h1,h2,h3,h4');
+                                    if (h) { title = h.textContent.trim(); break; }
+                                    title = node.textContent.trim().split('\\n')[0].trim();
+                                    if (title.length > 5) break;
+                                    node = node.parentElement;
+                                }
                             }
-                        }
-                        if (title) results.push({ title, url: href });
-                    });
-                    return results;
-                }
-                """) or []
+                            if (title) results.push({ title, url: href });
+                        });
+                        return results;
+                    }
+                    """) or []
+                    self._cached_entries = entries
+                    log(f"   ↳ {len(entries)} solicitation link(s) on listing page")
+                except Exception as e:
+                    log(f"❌ [JSI] Fetch error: {e}")
+                    entries = []
+                finally:
+                    browser.close()
 
-                log(f"   ↳ {len(entries)} solicitation(s) on listing page")
-                for e in entries[:3]:
-                    log(f"   • '{e['title'][:65]}'")
+        base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "jsi"
 
-                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "jsi"
+        n_title_miss = n_neg = n_dup = n_opened = 0
+        for entry in entries:
+            title = entry["title"]
+            url   = entry["url"]
 
-                n_title_miss = n_neg = n_dup = n_opened = 0
-                for entry in entries:
-                    title = entry["title"]
-                    url   = entry["url"]
+            if not keyword_matches(keyword, title):
+                n_title_miss += 1
+                continue
 
-                    if not keyword_matches(keyword, title):
-                        n_title_miss += 1
-                        continue
+            neg = find_negative_keyword(title, team_id=team_id)
+            if neg:
+                n_neg += 1
+                log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
+                continue
 
-                    neg = find_negative_keyword(title)
-                    if neg:
-                        n_neg += 1
-                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
-                        continue
+            if db and db.is_duplicate(title, url, team_id=team_id):
+                n_dup += 1
+                log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                continue
 
-                    if db and db.is_duplicate(title, url):
-                        n_dup += 1
-                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
-                        continue
-
-                    n_opened += 1
-                    log(f"   📄 Opening: {title[:70]}")
-                    rec = self._extract_detail(ctx, url, keyword, title, base, log, db)
+            n_opened += 1
+            log(f"   📄 Opening: {title[:70]}")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                ctx     = browser.new_context(accept_downloads=True)
+                try:
+                    rec = self._extract_detail(ctx, url, keyword, title, base, log, db, team_id=team_id)
                     if rec:
                         results.append(rec)
                         if on_result_ready:
                             on_result_ready(rec)
+                finally:
+                    browser.close()
 
-                log(
-                    f"   📊 '{keyword}' summary on JSI: {len(entries)} solicitation(s) listed → "
-                    f"{n_title_miss} without the keyword in the title, "
-                    f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
-                    f"{n_opened} opened for full check, {len(results)} saved"
-                )
-
-            except Exception as e:
-                log(f"❌ JSI scrape error: {e}")
-            finally:
-                browser.close()
+        log(
+            f"   📊 '{keyword}' summary on JSI: {len(entries)} item(s) listed → "
+            f"{n_title_miss} without the keyword in the title, "
+            f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
+            f"{n_opened} opened for full check, {len(results)} saved"
+        )
 
         return results
 
     # ── Detail page ────────────────────────────────────────────────────────
 
-    def _extract_detail(self, ctx, url, keyword, list_title, base_dir, log, db=None):
+    def _extract_detail(self, ctx, url, keyword, list_title, base_dir, log, db=None, team_id="cnk"):
         detail = ctx.new_page()
         try:
             detail.goto(url, wait_until="domcontentloaded", timeout=45000)
@@ -169,11 +178,11 @@ class JSIScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "jsi", keyword, "")
+                    db.mark_downloaded(title, url, "jsi", keyword, "", team_id=team_id)
                 return None
 
             # ── Active check: parse "Due Date" from page text ─────────────
