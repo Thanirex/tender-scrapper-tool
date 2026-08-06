@@ -232,6 +232,201 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // ── TAiQ Sophisticated Scrape & Funnel Report Card ─────────────────────
+    let trcSitesCache = [];
+
+    const toggleBtn = document.getElementById('trc-toggle-details');
+    const detailsCollapse = document.getElementById('trc-details-collapse');
+    const siteSearchInput = document.getElementById('trc-site-search');
+
+    if (toggleBtn && detailsCollapse) {
+        toggleBtn.addEventListener('click', () => {
+            const isHidden = detailsCollapse.style.display === 'none';
+            detailsCollapse.style.display = isHidden ? 'block' : 'none';
+            toggleBtn.textContent = isHidden ? 'Hide Details ▴' : 'Show Details ▾';
+        });
+    }
+
+    if (siteSearchInput) {
+        siteSearchInput.addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase().trim();
+            renderTrcSiteRows(trcSitesCache.filter(s => s.site.toLowerCase().includes(query)));
+        });
+    }
+
+    async function loadTaiqReport(dateStr) {
+        const dateLbl = document.getElementById('trc-date-label');
+        const statusBadge = document.getElementById('trc-status-badge');
+        const tilesContainer = document.getElementById('trc-stat-tiles');
+        const funnelBar = document.getElementById('trc-funnel-bar');
+        const funnelLegend = document.getElementById('trc-funnel-legend');
+        const funnelTotalLbl = document.getElementById('trc-funnel-total-lbl');
+        const kwList = document.getElementById('trc-keyword-list');
+
+        if (dateLbl) dateLbl.textContent = _pretty(dateStr);
+
+        const res = await authFetch(`/dashboard/taiq-report?date=${dateStr}`);
+        if (!res) return;
+        const data = await res.json();
+        const run = data.run;
+        const totals = data.totals || {};
+        const sites = data.sites || [];
+        const topKw = data.top_keywords || [];
+        const trend = data.trend || {};
+        trcSitesCache = sites;
+
+        if (!run) {
+            if (statusBadge) { statusBadge.className = 'trc-badge trc-badge-idle'; statusBadge.textContent = 'No Run Recorded'; }
+            if (tilesContainer) tilesContainer.innerHTML = '<p class="empty-msg" style="grid-column: 1/-1;">No extraction run recorded for this date.</p>';
+            if (funnelBar) funnelBar.innerHTML = '';
+            if (funnelLegend) funnelLegend.innerHTML = '';
+            return;
+        }
+
+        // Status badge
+        if (statusBadge) {
+            const st = run.status || 'complete';
+            const map = {
+                running:  ['Running Now', 'trc-badge-running'],
+                complete: ['Completed',   'trc-badge-complete'],
+                failed:   ['Failed',      'trc-badge-failed'],
+                stopped:  ['Stopped',     'trc-badge-stopped']
+            };
+            const [lbl, cls] = map[st] || [st, 'trc-badge-idle'];
+            statusBadge.className = `trc-badge ${cls}`;
+            statusBadge.textContent = lbl;
+        }
+
+        // Stat tiles
+        const listed = totals.listed || 0;
+        const saved = totals.saved || run.total_tenders || 0;
+        const rejectedTotal = totals.rejected_total || 0;
+        const sitesScanned = totals.sites_scanned || sites.length || 0;
+
+        const trendPct = trend.pct_change || 0;
+        const trendSymbol = trendPct >= 0 ? '▲' : '▼';
+        const trendClass = trendPct >= 0 ? 'trc-trend-up' : 'trc-trend-down';
+        const trendHtml = trend.avg_7d ? `<span class="trc-trend ${trendClass}">${trendSymbol} ${Math.abs(trendPct)}% vs 7d avg</span>` : '';
+
+        if (tilesContainer) {
+            tilesContainer.innerHTML = `
+                <div class="trc-tile">
+                    <span class="trc-tile-icon">🌐</span>
+                    <div class="trc-tile-body">
+                        <span class="trc-tile-val">${sitesScanned}</span>
+                        <span class="trc-tile-lbl">Sites Scanned</span>
+                    </div>
+                </div>
+                <div class="trc-tile">
+                    <span class="trc-tile-icon">🔍</span>
+                    <div class="trc-tile-body">
+                        <span class="trc-tile-val">${listed.toLocaleString()}</span>
+                        <span class="trc-tile-lbl">Looked At</span>
+                    </div>
+                </div>
+                <div class="trc-tile trc-tile-saved">
+                    <span class="trc-tile-icon">✅</span>
+                    <div class="trc-tile-body">
+                        <span class="trc-tile-val">${saved.toLocaleString()} ${trendHtml}</span>
+                        <span class="trc-tile-lbl">Tenders Saved</span>
+                    </div>
+                </div>
+                <div class="trc-tile">
+                    <span class="trc-tile-icon">🚫</span>
+                    <div class="trc-tile-body">
+                        <span class="trc-tile-val">${rejectedTotal.toLocaleString()}</span>
+                        <span class="trc-tile-lbl">Filtered Out</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Rejection Funnel Bar & Legend
+        const rej = totals.rejected || {};
+        const reasonLabels = {
+            title_miss: { label: "Keyword Not in Title", color: "#64748b" },
+            negative:   { label: "Negative Keywords",    color: "#ef4444" },
+            stale:      { label: "Older than Cutoff",    color: "#f59e0b" },
+            no_date:    { label: "No Date Found",        color: "#64748b" },
+            closed:     { label: "Archived / Expired",   color: "#a855f7" },
+            duplicate:  { label: "Already Collected",    color: "#3b82f6" },
+            error:      { label: "Scrape Error",         color: "#dc2626" },
+        };
+
+        if (funnelTotalLbl) funnelTotalLbl.textContent = `${rejectedTotal.toLocaleString()} total filtered out`;
+
+        let barSegmentsHtml = '';
+        let legendItemsHtml = '';
+
+        if (rejectedTotal > 0) {
+            for (const [rk, meta] of Object.entries(reasonLabels)) {
+                const count = rej[rk] || 0;
+                if (count > 0) {
+                    const widthPct = Math.max(1, (count / rejectedTotal * 100).toFixed(1));
+                    barSegmentsHtml += `<div class="trc-funnel-seg" style="width: ${widthPct}%; background-color: ${meta.color};" title="${meta.label}: ${count.toLocaleString()} (${widthPct}%)"></div>`;
+                    legendItemsHtml += `
+                        <div class="trc-legend-item">
+                            <span class="trc-legend-dot" style="background-color: ${meta.color}"></span>
+                            <span class="trc-legend-text">${meta.label}: <strong>${count.toLocaleString()}</strong></span>
+                        </div>
+                    `;
+                }
+            }
+        } else {
+            barSegmentsHtml = `<div class="trc-funnel-seg" style="width: 100%; background-color: #22c55e;" title="0 Filtered"></div>`;
+            legendItemsHtml = `<div class="trc-legend-item"><span class="trc-legend-dot" style="background-color: #22c55e"></span><span>100% Retained / Clean Run</span></div>`;
+        }
+
+        if (funnelBar) funnelBar.innerHTML = barSegmentsHtml;
+        if (funnelLegend) funnelLegend.innerHTML = legendItemsHtml;
+
+        renderTrcSiteRows(sites);
+
+        if (kwList) {
+            if (topKw.length > 0) {
+                kwList.innerHTML = topKw.map(k => `
+                    <div class="trc-kw-item">
+                        <span class="trc-kw-name">${_escapeHtml(k.keyword)}</span>
+                        <span class="trc-kw-count">${k.count} tender${k.count !== 1 ? 's' : ''}</span>
+                    </div>
+                `).join('');
+            } else {
+                kwList.innerHTML = '<p class="empty-msg">No keyword matches recorded for this run.</p>';
+            }
+        }
+    }
+
+    function renderTrcSiteRows(sites) {
+        const siteRowsContainer = document.getElementById('trc-site-rows');
+        if (!siteRowsContainer) return;
+
+        if (!sites || sites.length === 0) {
+            siteRowsContainer.innerHTML = '<tr><td colspan="6" class="empty-msg">No website stats recorded.</td></tr>';
+            return;
+        }
+
+        const badgeMap = {
+            healthy:   ['Healthy',   'trc-sbadge-healthy'],
+            low_yield: ['Low Yield', 'trc-sbadge-low'],
+            warning:   ['Warning',   'trc-sbadge-warn'],
+            idle:      ['Idle',      'trc-sbadge-idle']
+        };
+
+        siteRowsContainer.innerHTML = sites.map(s => {
+            const [statusLbl, statusCls] = badgeMap[s.status] || [s.status, 'trc-sbadge-idle'];
+            return `
+                <tr>
+                    <td><strong>${_escapeHtml(s.site)}</strong></td>
+                    <td>${s.listed.toLocaleString()}</td>
+                    <td><strong style="color: ${s.saved > 0 ? '#22c55e' : 'inherit'}">${s.saved.toLocaleString()}</strong></td>
+                    <td>${s.rejected.toLocaleString()}</td>
+                    <td>${s.yield_pct}%</td>
+                    <td><span class="trc-sbadge ${statusCls}">${statusLbl}</span></td>
+                </tr>
+            `;
+        }).join('');
+    }
+
     // ── Data loading ───────────────────────────────────────────────────────
 
     async function loadDay(dateStr) {
@@ -242,6 +437,7 @@ document.addEventListener('DOMContentLoaded', () => {
         filterKw.value   = '';
         // Stats must finish first — it populates the site dropdown before tenders load
         await loadStats(dateStr);
+        await loadTaiqReport(dateStr);
         await loadTenders();
     }
 

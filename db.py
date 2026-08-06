@@ -1014,6 +1014,96 @@ class TenderDB:
             q += " ORDER BY id DESC LIMIT 1"
             return conn.execute(q, params).fetchone()
 
+    def get_taiq_detailed_report(self, date_str: str = None, team_id: str = "cnk") -> dict:
+        tid = team_id or "cnk"
+        if not date_str:
+            date_str = now_ist_naive().strftime("%Y-%m-%d")
+
+        cron_run = self.get_cron_run_by_date(date_str, team_id=tid)
+        if not cron_run:
+            cron_run = self.get_latest_cron_run(team_id=tid)
+
+        if not cron_run:
+            return {"run": None, "report": None}
+
+        run_id = cron_run["id"]
+        stats_data = {}
+        if cron_row_json := cron_run.get("stats_json"):
+            try:
+                stats_data = json.loads(cron_row_json)
+            except Exception:
+                pass
+
+        totals = stats_data.get("totals", {
+            "sites_scanned": 0,
+            "listed": 0,
+            "saved": cron_run.get("total_tenders", 0),
+            "rejected_total": 0,
+            "rejected": {}
+        })
+        sites_dict = stats_data.get("sites", {})
+
+        sites_list = []
+        for s_name, s_data in sites_dict.items():
+            listed = s_data.get("listed", 0)
+            saved = s_data.get("saved", 0)
+            rejected = s_data.get("rejected_total", 0)
+            yield_pct = round((saved / listed * 100), 2) if listed > 0 else 0.0
+            
+            if s_data.get("rejected", {}).get("error", 0) > 0 and saved == 0:
+                status = "warning"
+            elif saved > 0:
+                status = "healthy"
+            elif listed > 0:
+                status = "low_yield"
+            else:
+                status = "idle"
+
+            sites_list.append({
+                "site": s_name.upper(),
+                "listed": listed,
+                "saved": saved,
+                "rejected": rejected,
+                "yield_pct": yield_pct,
+                "status": status
+            })
+
+        with self._connect() as conn:
+            kw_rows = conn.execute(
+                """SELECT keyword, COUNT(*) as count 
+                   FROM cron_tenders 
+                   WHERE run_id = ? AND team_id = ?
+                   GROUP BY keyword 
+                   ORDER BY count DESC LIMIT 10""",
+                (run_id, tid)
+            ).fetchall()
+        top_keywords = [{"keyword": r["keyword"], "count": r["count"]} for r in kw_rows]
+
+        with self._connect() as conn:
+            avg_row = conn.execute(
+                """SELECT AVG(total_tenders) as avg_tenders 
+                   FROM cron_runs 
+                   WHERE team_id = ? AND status = 'complete' AND id != ?
+                   ORDER BY id DESC LIMIT 7""",
+                (tid, run_id)
+            ).fetchone()
+        avg_tenders = round(avg_row["avg_tenders"], 1) if avg_row and avg_row["avg_tenders"] else 0.0
+        saved_today = cron_run.get("total_tenders", 0) or 0
+        diff = saved_today - avg_tenders
+        pct_change = round((diff / avg_tenders * 100), 1) if avg_tenders > 0 else 0.0
+
+        return {
+            "run": cron_run,
+            "totals": totals,
+            "sites": sites_list,
+            "top_keywords": top_keywords,
+            "trend": {
+                "avg_7d": avg_tenders,
+                "diff": diff,
+                "pct_change": pct_change
+            }
+        }
+
     def mark_stale_runs_failed(self) -> int:
         now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:

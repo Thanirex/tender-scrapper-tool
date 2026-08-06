@@ -57,3 +57,14 @@ async def get_dates(
 ):
     team_id = current_user.get("team_id", "cnk")
     return _db(request).get_dates_with_data(team_id=team_id)
+
+
+@router.get("/taiq-report")
+async def get_taiq_report(
+    request: Request,
+    date: str = Query(default=None),
+    current_user: dict = _auth,
+):
+    """Detailed TAiQ run analytics, rejection funnel, per-site health, and keyword leaderboard."""
+    team_id = current_user.get("team_id", "cnk")
+    return _db(request).get_taiq_detailed_report(date_str=date, team_id=team_id)
