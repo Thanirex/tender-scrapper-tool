@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from date_utils import get_max_age_hours
 from paths import DOWNLOADS_DIR
 from keyword_utils import keyword_matches, find_negative_keyword
 

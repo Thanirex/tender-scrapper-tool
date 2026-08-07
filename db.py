@@ -608,7 +608,12 @@ class TenderDB:
 
     # ── Dashboard queries ──────────────────────────────────────────────────────
 
-    def get_stats_for_date(self, date_str: str, team_id: str = None) -> dict:
+    def get_stats_for_date(self, date_str: str = None, start_date: str = None, end_date: str = None, team_id: str = None) -> dict:
+        if start_date and end_date and start_date != end_date:
+            return self.get_stats_for_date_range(start_date, end_date, team_id=team_id)
+        if not date_str:
+            date_str = start_date or now_ist_naive().strftime("%Y-%m-%d")
+
         with self._connect() as conn:
             sess_sql = """SELECT s.id, u.username, s.site, s.status, s.zip_filename,
                                 s.created_at,
@@ -642,27 +647,146 @@ class TenderDB:
             if team_id:
                 cron_sql += " AND team_id = ?"
                 cron_params.append(team_id)
-            cron_sql += " ORDER BY id DESC LIMIT 1"
-            cron_row = conn.execute(cron_sql, cron_params).fetchone()
+            cron_sql += " ORDER BY id DESC"
+            cron_rows = conn.execute(cron_sql, cron_params).fetchall()
+
+            cron_ids = [c["id"] for c in cron_rows]
+            ct_rows = []
+            if cron_ids:
+                ph = ",".join("?" for _ in cron_ids)
+                ct_sql = f"SELECT LOWER(site) as site, COUNT(*) as count FROM cron_tenders WHERE run_id IN ({ph}) GROUP BY LOWER(site)"
+                ct_rows = conn.execute(ct_sql, cron_ids).fetchall()
 
         sessions = list(session_rows)
-        by_site  = list(by_site_rows)
+        site_map = {}
+        for r in by_site_rows:
+            sn = r["site"].lower()
+            site_map[sn] = site_map.get(sn, 0) + r["count"]
 
-        if cron_row and cron_row["status"] in ("complete", "failed", "stopped"):
-            sessions.append({
-                "id":            f"taiq_{cron_row['id']}",
-                "username":      "TAiQ",
-                "site":          "taiq",
-                "status":        cron_row["status"],
-                "zip_filename":  None,
-                "created_at":    cron_row["started_at"],
-                "keywords":      f"{cron_row['keywords_done']}/{cron_row['total_keywords']} keywords",
-                "tenders_found": cron_row["total_tenders"] or 0,
-                "source":        "taiq",
-            })
-            taiq_count = cron_row["total_tenders"] or 0
-            if taiq_count > 0:
-                by_site.append({"site": "taiq", "count": taiq_count})
+        for r in ct_rows:
+            sn = r["site"]
+            site_map[sn] = site_map.get(sn, 0) + r["count"]
+
+        total_taiq = 0
+        for cr in cron_rows:
+            if cr["status"] in ("complete", "failed", "stopped"):
+                t_count = cr["total_tenders"] or 0
+                total_taiq += t_count
+                sessions.append({
+                    "id":            f"taiq_{cr['id']}",
+                    "username":      "TAiQ",
+                    "site":          "taiq",
+                    "status":        cr["status"],
+                    "zip_filename":  None,
+                    "created_at":    cr["started_at"],
+                    "keywords":      f"{cr['keywords_done']}/{cr['total_keywords']} keywords",
+                    "tenders_found": t_count,
+                    "source":        "taiq",
+                })
+                if s_json := cr.get("stats_json"):
+                    try:
+                        s_data = json.loads(s_json)
+                        for sn, sd in s_data.get("sites", {}).items():
+                            sn_l = sn.lower()
+                            saved_cnt = sd.get("saved", 0)
+                            if saved_cnt > 0 and sn_l not in site_map:
+                                site_map[sn_l] = saved_cnt
+                    except Exception:
+                        pass
+
+        by_site = [{"site": k, "count": v} for k, v in site_map.items()]
+        if total_taiq > 0:
+            by_site.append({"site": "taiq", "count": total_taiq})
+
+        return {"sessions": sessions, "by_site": by_site}
+
+    def get_stats_for_date_range(self, start_date: str, end_date: str, team_id: str = None) -> dict:
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        with self._connect() as conn:
+            sess_sql = """SELECT s.id, u.username, s.site, s.status, s.zip_filename,
+                                s.created_at,
+                                GROUP_CONCAT(DISTINCT sk.keyword) AS keywords,
+                                COUNT(DISTINCT ft.id)             AS tenders_found
+                         FROM search_sessions s
+                         JOIN users u ON u.id = s.user_id
+                         LEFT JOIN session_keywords sk ON sk.session_id = s.id
+                         LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                         WHERE s.run_date BETWEEN ? AND ?"""
+            sess_params = [start_date, end_date]
+            if team_id:
+                sess_sql += " AND s.team_id = ?"
+                sess_params.append(team_id)
+            sess_sql += " GROUP BY s.id ORDER BY s.created_at"
+            session_rows = conn.execute(sess_sql, sess_params).fetchall()
+
+            site_sql = """SELECT s.site, COUNT(DISTINCT ft.id) AS count
+                          FROM search_sessions s
+                          LEFT JOIN found_tenders ft ON ft.session_id = s.id
+                          WHERE s.run_date BETWEEN ? AND ?"""
+            site_params = [start_date, end_date]
+            if team_id:
+                site_sql += " AND s.team_id = ?"
+                site_params.append(team_id)
+            site_sql += " GROUP BY s.site"
+            by_site_rows = conn.execute(site_sql, site_params).fetchall()
+
+            cron_sql = "SELECT * FROM cron_runs WHERE run_date BETWEEN ? AND ?"
+            cron_params = [start_date, end_date]
+            if team_id:
+                cron_sql += " AND team_id = ?"
+                cron_params.append(team_id)
+            cron_sql += " ORDER BY id DESC"
+            cron_rows = conn.execute(cron_sql, cron_params).fetchall()
+
+            cron_ids = [c["id"] for c in cron_rows]
+            ct_rows = []
+            if cron_ids:
+                ph = ",".join("?" for _ in cron_ids)
+                ct_sql = f"SELECT LOWER(site) as site, COUNT(*) as count FROM cron_tenders WHERE run_id IN ({ph}) GROUP BY LOWER(site)"
+                ct_rows = conn.execute(ct_sql, cron_ids).fetchall()
+
+        sessions = list(session_rows)
+        site_map = {}
+        for r in by_site_rows:
+            sn = r["site"].lower()
+            site_map[sn] = site_map.get(sn, 0) + r["count"]
+
+        for r in ct_rows:
+            sn = r["site"]
+            site_map[sn] = site_map.get(sn, 0) + r["count"]
+
+        total_taiq = 0
+        for cr in cron_rows:
+            if cr["status"] in ("complete", "failed", "stopped"):
+                t_count = cr["total_tenders"] or 0
+                total_taiq += t_count
+                sessions.append({
+                    "id":            f"taiq_{cr['id']}",
+                    "username":      "TAiQ",
+                    "site":          "taiq",
+                    "status":        cr["status"],
+                    "zip_filename":  None,
+                    "created_at":    cr["started_at"],
+                    "keywords":      f"{cr['keywords_done']}/{cr['total_keywords']} keywords",
+                    "tenders_found": t_count,
+                    "source":        "taiq",
+                })
+                if s_json := cr.get("stats_json"):
+                    try:
+                        s_data = json.loads(s_json)
+                        for sn, sd in s_data.get("sites", {}).items():
+                            sn_l = sn.lower()
+                            saved_cnt = sd.get("saved", 0)
+                            if saved_cnt > 0 and sn_l not in site_map:
+                                site_map[sn_l] = saved_cnt
+                    except Exception:
+                        pass
+
+        by_site = [{"site": k, "count": v} for k, v in site_map.items()]
+        if total_taiq > 0:
+            by_site.append({"site": "taiq", "count": total_taiq})
 
         return {"sessions": sessions, "by_site": by_site}
 
@@ -670,18 +794,19 @@ class TenderDB:
                               site: str = None, keyword: str = None, team_id: str = None) -> "list[dict]":
         result = []
 
+        # 1. Fetch manual search tenders from found_tenders
         if site != "taiq":
             with self._connect() as conn:
-                q      = """SELECT ft.*
-                            FROM found_tenders ft
-                            JOIN search_sessions s ON s.id = ft.session_id
-                            WHERE s.run_date = ?"""
+                q = """SELECT ft.*
+                       FROM found_tenders ft
+                       JOIN search_sessions s ON s.id = ft.session_id
+                       WHERE s.run_date = ?"""
                 params: list = [date_str]
                 if team_id:
                     q += " AND s.team_id = ?"
                     params.append(team_id)
-                if site:
-                    q += " AND s.site = ?"
+                if site and site != "taiq":
+                    q += " AND LOWER(s.site) = LOWER(?)"
                     params.append(site)
                 if keyword:
                     q += " AND ft.keyword LIKE ?"
@@ -693,22 +818,106 @@ class TenderDB:
                     r["fields"] = json.loads(r.get("summary_json") or "{}")
                 except Exception:
                     r["fields"] = {}
+                r["source"] = "manual"
                 result.append(r)
 
-        if not site or site == "taiq":
-            cron_run = self.get_cron_run_by_date(date_str, team_id=team_id)
-            if cron_run:
-                with self._connect() as conn:
-                    q      = "SELECT * FROM cron_tenders WHERE run_id = ?"
-                    params = [cron_run["id"]]
-                    if team_id:
-                        q += " AND team_id = ?"
-                        params.append(team_id)
-                    if keyword:
-                        q += " AND keyword LIKE ?"
-                        params.append(f"%{keyword}%")
-                    q += " ORDER BY found_at DESC"
-                    rows = conn.execute(q, params).fetchall()
+        # 2. Fetch TAiQ cron tenders from cron_tenders
+        with self._connect() as conn:
+            cron_runs_q = "SELECT id FROM cron_runs WHERE run_date = ?"
+            cron_params = [date_str]
+            if team_id:
+                cron_runs_q += " AND team_id = ?"
+                cron_params.append(team_id)
+            run_rows = conn.execute(cron_runs_q, cron_params).fetchall()
+            run_ids = [r["id"] for r in run_rows]
+
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                q = f"SELECT * FROM cron_tenders WHERE run_id IN ({placeholders})"
+                params = list(run_ids)
+                if team_id:
+                    q += " AND team_id = ?"
+                    params.append(team_id)
+                if site and site != "taiq":
+                    q += " AND LOWER(site) = LOWER(?)"
+                    params.append(site)
+                if keyword:
+                    q += " AND keyword LIKE ?"
+                    params.append(f"%{keyword}%")
+                q += " ORDER BY found_at DESC"
+                rows = conn.execute(q, params).fetchall()
+                for r in rows:
+                    try:
+                        r["fields"] = json.loads(r.get("summary_json") or "{}")
+                    except Exception:
+                        r["fields"] = {}
+                    r["source"] = "taiq"
+                    result.append(r)
+
+        result.sort(key=lambda x: x.get("found_at", ""), reverse=True)
+        return result
+
+    def get_tenders_for_date_range(self, start_date: str, end_date: str = None,
+                                    site: str = None, keyword: str = None, team_id: str = None) -> "list[dict]":
+        if not end_date or end_date == start_date:
+            return self.get_tenders_for_date(start_date, site=site, keyword=keyword, team_id=team_id)
+
+        result = []
+        if start_date > end_date:
+            start_date, end_date = end_date, start_date
+
+        # 1. Fetch manual search tenders from found_tenders
+        if site != "taiq":
+            with self._connect() as conn:
+                q = """SELECT ft.*
+                       FROM found_tenders ft
+                       JOIN search_sessions s ON s.id = ft.session_id
+                       WHERE s.run_date BETWEEN ? AND ?"""
+                params: list = [start_date, end_date]
+                if team_id:
+                    q += " AND s.team_id = ?"
+                    params.append(team_id)
+                if site and site != "taiq":
+                    q += " AND LOWER(s.site) = LOWER(?)"
+                    params.append(site)
+                if keyword:
+                    q += " AND ft.keyword LIKE ?"
+                    params.append(f"%{keyword}%")
+                q += " ORDER BY ft.found_at DESC"
+                rows = conn.execute(q, params).fetchall()
+            for r in rows:
+                try:
+                    r["fields"] = json.loads(r.get("summary_json") or "{}")
+                except Exception:
+                    r["fields"] = {}
+                r["source"] = "manual"
+                result.append(r)
+
+        # 2. Fetch TAiQ cron tenders from cron_tenders
+        with self._connect() as conn:
+            cron_runs_q = "SELECT id FROM cron_runs WHERE run_date BETWEEN ? AND ?"
+            cron_params = [start_date, end_date]
+            if team_id:
+                cron_runs_q += " AND team_id = ?"
+                cron_params.append(team_id)
+            run_rows = conn.execute(cron_runs_q, cron_params).fetchall()
+            run_ids = [r["id"] for r in run_rows]
+
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                q = f"SELECT * FROM cron_tenders WHERE run_id IN ({placeholders})"
+                params = list(run_ids)
+                if team_id:
+                    q += " AND team_id = ?"
+                    params.append(team_id)
+                if site and site != "taiq":
+                    q += " AND LOWER(site) = LOWER(?)"
+                    params.append(site)
+                if keyword:
+                    q += " AND keyword LIKE ?"
+                    params.append(f"%{keyword}%")
+                q += " ORDER BY found_at DESC"
+                rows = conn.execute(q, params).fetchall()
                 for r in rows:
                     try:
                         r["fields"] = json.loads(r.get("summary_json") or "{}")
@@ -1014,10 +1223,100 @@ class TenderDB:
             q += " ORDER BY id DESC LIMIT 1"
             return conn.execute(q, params).fetchone()
 
-    def get_taiq_detailed_report(self, date_str: str = None, team_id: str = "cnk") -> dict:
+    def get_taiq_detailed_report(self, date_str: str = None, start_date: str = None, end_date: str = None, team_id: str = "cnk") -> dict:
         tid = team_id or "cnk"
+        if start_date and end_date and start_date != end_date:
+            if start_date > end_date:
+                start_date, end_date = end_date, start_date
+            with self._connect() as conn:
+                cron_runs = conn.execute(
+                    "SELECT * FROM cron_runs WHERE run_date BETWEEN ? AND ? AND team_id = ? ORDER BY id DESC",
+                    (start_date, end_date, tid),
+                ).fetchall()
+            if not cron_runs:
+                return {"run": None, "report": None}
+
+            combined_totals = {
+                "sites_scanned": 0,
+                "listed": 0,
+                "saved": 0,
+                "rejected_total": 0,
+                "rejected": {}
+            }
+            sites_map = {}
+            run_ids = [r["id"] for r in cron_runs]
+
+            for r in cron_runs:
+                combined_totals["saved"] += (r.get("total_tenders", 0) or 0)
+                if s_json := r.get("stats_json"):
+                    try:
+                        s_data = json.loads(s_json)
+                        tot = s_data.get("totals", {})
+                        combined_totals["sites_scanned"] = max(combined_totals["sites_scanned"], tot.get("sites_scanned", 0))
+                        combined_totals["listed"] += tot.get("listed", 0)
+                        combined_totals["rejected_total"] += tot.get("rejected_total", 0)
+                        for rk, rv in tot.get("rejected", {}).items():
+                            combined_totals["rejected"][rk] = combined_totals["rejected"].get(rk, 0) + rv
+
+                        for sn, sd in s_data.get("sites", {}).items():
+                            sn_u = sn.upper()
+                            if sn_u not in sites_map:
+                                sites_map[sn_u] = {"site": sn_u, "listed": 0, "saved": 0, "rejected": 0, "error_cnt": 0}
+                            sites_map[sn_u]["listed"] += sd.get("listed", 0)
+                            sites_map[sn_u]["saved"] += sd.get("saved", 0)
+                            sites_map[sn_u]["rejected"] += sd.get("rejected_total", 0)
+                            sites_map[sn_u]["error_cnt"] += sd.get("rejected", {}).get("error", 0)
+                    except Exception:
+                        pass
+
+            sites_list = []
+            for sn_u, s_data in sites_map.items():
+                listed = s_data["listed"]
+                saved = s_data["saved"]
+                rejected = s_data["rejected"]
+                yield_pct = round((saved / listed * 100), 2) if listed > 0 else 0.0
+                if s_data["error_cnt"] > 0 and saved == 0:
+                    status = "warning"
+                elif saved > 0:
+                    status = "healthy"
+                elif listed > 0:
+                    status = "low_yield"
+                else:
+                    status = "idle"
+                sites_list.append({
+                    "site": sn_u,
+                    "listed": listed,
+                    "saved": saved,
+                    "rejected": rejected,
+                    "yield_pct": yield_pct,
+                    "status": status
+                })
+
+            with self._connect() as conn:
+                placeholders = ",".join("?" for _ in run_ids)
+                kw_rows = conn.execute(
+                    f"""SELECT keyword, COUNT(*) as count 
+                       FROM cron_tenders 
+                       WHERE run_id IN ({placeholders}) AND team_id = ?
+                       GROUP BY keyword 
+                       ORDER BY count DESC LIMIT 10""",
+                    (*run_ids, tid)
+                ).fetchall()
+            top_keywords = [{"keyword": r["keyword"], "count": r["count"]} for r in kw_rows]
+
+            latest_run = dict(cron_runs[0])
+            latest_run["total_tenders"] = combined_totals["saved"]
+
+            return {
+                "run": latest_run,
+                "totals": combined_totals,
+                "sites": sites_list,
+                "top_keywords": top_keywords,
+                "trend": {"avg_7d": 0, "diff": 0, "pct_change": 0}
+            }
+
         if not date_str:
-            date_str = now_ist_naive().strftime("%Y-%m-%d")
+            date_str = start_date or now_ist_naive().strftime("%Y-%m-%d")
 
         cron_run = self.get_cron_run_by_date(date_str, team_id=tid)
         if not cron_run:

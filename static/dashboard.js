@@ -27,8 +27,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (calMonth > 11) { calMonth = 0; calYear++; }
         renderCalendar();
     });
+    let isUpdatingDropdown = false;
+    let currentTendersRequestId = 0;
+
     document.getElementById('apply-filter').addEventListener('click', loadTenders);
-    filterSite.addEventListener('change', loadTenders);
+    filterSite.addEventListener('change', () => {
+        if (!isUpdatingDropdown) loadTenders();
+    });
 
     // ── TAiQ status widget ─────────────────────────────────────────────────
     let taiqPollTimer = null;
@@ -192,7 +197,117 @@ document.addEventListener('DOMContentLoaded', () => {
             loadDay(selectedDate);
         });
 
-    // ── Calendar ───────────────────────────────────────────────────────────
+    // ── Calendar & Date Range Animation ─────────────────────────────────────
+    let rangeStartDate = null;
+    let rangeEndDate   = null;
+    let hoverDate      = null;
+    let isCustomRangeMode = false;
+    let loadedTendersCache = [];
+
+    const customBox = document.getElementById('cal-custom-box');
+    const fromInput = document.getElementById('cal-from-date');
+    const toInput   = document.getElementById('cal-to-date');
+    const applyCustomBtn = document.getElementById('cal-apply-custom');
+
+    // Preset Chip Click Listeners
+    const presetRow = document.getElementById('cal-presets-row');
+    if (presetRow) {
+        presetRow.addEventListener('click', (e) => {
+            const btn = e.target.closest('.cal-preset-chip');
+            if (!btn || btn.id === 'cal-apply-custom') return;
+
+            const wasActive = btn.classList.contains('active');
+            const preset    = btn.dataset.preset;
+            const now       = new Date();
+
+            // If user clicks an ALREADY ACTIVE pill (except if switching to normal today), deselect it & reset to default Today
+            if (wasActive && preset !== 'today') {
+                presetRow.querySelectorAll('.cal-preset-chip').forEach(b => b.classList.remove('active'));
+                const todayBtn = presetRow.querySelector('[data-preset="today"]');
+                if (todayBtn) todayBtn.classList.add('active');
+
+                isCustomRangeMode = false;
+                if (customBox) customBox.style.display = 'none';
+                selectedDate   = _fmtDate(now);
+                rangeStartDate = null;
+                rangeEndDate   = null;
+
+                renderCalendar();
+                loadDay(selectedDate);
+                return;
+            }
+
+            presetRow.querySelectorAll('.cal-preset-chip').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            if (preset === 'custom') {
+                isCustomRangeMode = true;
+                if (customBox) customBox.style.display = 'flex';
+                if (!rangeStartDate || !rangeEndDate) {
+                    const s = new Date(now); s.setDate(s.getDate() - 6);
+                    rangeStartDate = _fmtDate(s);
+                    rangeEndDate   = _fmtDate(now);
+                }
+                if (fromInput) fromInput.value = rangeStartDate;
+                if (toInput)   toInput.value   = rangeEndDate;
+                selectedDate = null;
+            } else {
+                // Normal preset mode
+                isCustomRangeMode = false;
+                if (customBox) customBox.style.display = 'none';
+
+                if (preset === 'today') {
+                    selectedDate   = _fmtDate(now);
+                    rangeStartDate = null;
+                    rangeEndDate   = null;
+                } else if (preset === 'yesterday') {
+                    const y = new Date(now); y.setDate(y.getDate() - 1);
+                    selectedDate   = _fmtDate(y);
+                    rangeStartDate = null;
+                    rangeEndDate   = null;
+                } else if (preset === '7days') {
+                    const s = new Date(now); s.setDate(s.getDate() - 6);
+                    rangeStartDate = _fmtDate(s);
+                    rangeEndDate   = _fmtDate(now);
+                    selectedDate   = null;
+                } else if (preset === '30days') {
+                    const s = new Date(now); s.setDate(s.getDate() - 29);
+                    rangeStartDate = _fmtDate(s);
+                    rangeEndDate   = _fmtDate(now);
+                    selectedDate   = null;
+                }
+            }
+
+            renderCalendar();
+            if (rangeStartDate && rangeEndDate) {
+                loadDayRange(rangeStartDate, rangeEndDate);
+            } else {
+                loadDay(selectedDate);
+            }
+        });
+    }
+
+    function _onCustomDateInputsChanged() {
+        const fVal = fromInput ? fromInput.value : '';
+        const tVal = toInput ? toInput.value : '';
+        if (fVal && tVal) {
+            rangeStartDate = fVal < tVal ? fVal : tVal;
+            rangeEndDate   = fVal < tVal ? tVal : fVal;
+            selectedDate   = null;
+            renderCalendar();
+            loadDayRange(rangeStartDate, rangeEndDate);
+        }
+    }
+
+    if (applyCustomBtn) {
+        applyCustomBtn.addEventListener('click', _onCustomDateInputsChanged);
+    }
+    if (fromInput) {
+        fromInput.addEventListener('change', _onCustomDateInputsChanged);
+    }
+    if (toInput) {
+        toInput.addEventListener('change', _onCustomDateInputsChanged);
+    }
 
     function renderCalendar() {
         const months = ['January','February','March','April','May','June',
@@ -201,7 +316,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const firstDay = new Date(calYear, calMonth, 1).getDay(); // 0=Sun
         const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
-        // Shift so Monday=0
         const startOffset = (firstDay + 6) % 7;
 
         let html = '';
@@ -211,25 +325,103 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let d = 1; d <= daysInMonth; d++) {
             const dateStr = `${calYear}-${String(calMonth + 1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
             const isToday    = dateStr === _fmtDate(today);
-            const isSelected = dateStr === selectedDate;
+            const isSelected = selectedDate ? (dateStr === selectedDate) : false;
             const hasData    = dataDates.has(dateStr);
             const isFuture   = dateStr > _fmtDate(today);
+
             let cls = 'cal-day';
             if (isToday)    cls += ' cal-today';
             if (isSelected) cls += ' cal-selected';
             if (hasData)    cls += ' cal-has-data';
             if (isFuture)   cls += ' cal-future';
+
+            if (rangeStartDate && rangeEndDate) {
+                if (dateStr === rangeStartDate) cls += ' cal-range-start';
+                else if (dateStr === rangeEndDate) cls += ' cal-range-end';
+                else if (dateStr > rangeStartDate && dateStr < rangeEndDate) cls += ' cal-range-mid';
+            } else if (rangeStartDate && !rangeEndDate) {
+                if (dateStr === rangeStartDate) cls += ' cal-range-start';
+                else if (hoverDate) {
+                    const min = rangeStartDate < hoverDate ? rangeStartDate : hoverDate;
+                    const max = rangeStartDate < hoverDate ? hoverDate : rangeStartDate;
+                    if (dateStr >= min && dateStr <= max) cls += ' cal-hover-range';
+                }
+            }
+
             html += `<div class="${cls}" data-date="${dateStr}">${d}${hasData ? '<span class="cal-dot"></span>' : ''}</div>`;
         }
         calGrid.innerHTML = html;
 
-        calGrid.querySelectorAll('.cal-day:not(.cal-empty):not(.cal-future)').forEach(el => {
+        const dayEls = calGrid.querySelectorAll('.cal-day:not(.cal-empty):not(.cal-future)');
+        dayEls.forEach(el => {
+            el.addEventListener('mouseenter', () => {
+                if (isCustomRangeMode && rangeStartDate && !rangeEndDate) {
+                    hoverDate = el.dataset.date;
+                    renderCalendar();
+                }
+            });
+
             el.addEventListener('click', () => {
-                selectedDate = el.dataset.date;
-                renderCalendar();
-                loadDay(selectedDate);
+                const clickedDate = el.dataset.date;
+
+                if (!isCustomRangeMode) {
+                    // Normal single date click mode
+                    selectedDate   = clickedDate;
+                    rangeStartDate = null;
+                    rangeEndDate   = null;
+                    if (presetRow) presetRow.querySelectorAll('.cal-preset-chip').forEach(b => b.classList.remove('active'));
+                    renderCalendar();
+                    loadDay(selectedDate);
+                    return;
+                }
+
+                // Custom Range click mode
+                if (!rangeStartDate || (rangeStartDate && rangeEndDate)) {
+                    rangeStartDate = clickedDate;
+                    rangeEndDate   = null;
+                    selectedDate   = null;
+                    if (fromInput) fromInput.value = rangeStartDate;
+                    if (toInput)   toInput.value   = '';
+                    renderCalendar();
+                } else {
+                    if (clickedDate < rangeStartDate) {
+                        rangeEndDate   = rangeStartDate;
+                        rangeStartDate = clickedDate;
+                    } else if (clickedDate === rangeStartDate) {
+                        rangeEndDate = null;
+                        selectedDate = clickedDate;
+                    } else {
+                        rangeEndDate = clickedDate;
+                    }
+                    if (fromInput) fromInput.value = rangeStartDate;
+                    if (toInput)   toInput.value   = rangeEndDate || rangeStartDate;
+                    hoverDate = null;
+                    selectedDate = null;
+                    renderCalendar();
+                    if (rangeStartDate && rangeEndDate) {
+                        loadDayRange(rangeStartDate, rangeEndDate);
+                    } else {
+                        loadDay(rangeStartDate);
+                    }
+                }
             });
         });
+
+        calGrid.addEventListener('mouseleave', () => {
+            if (isCustomRangeMode && rangeStartDate && !rangeEndDate && hoverDate) {
+                hoverDate = null;
+                renderCalendar();
+            }
+        });
+    }
+
+    async function loadDayRange(startDate, endDate) {
+        dateLabel.textContent = `Overview for ${_pretty(startDate)} – ${_pretty(endDate)}`;
+        await loadStats(null, startDate, endDate);
+        await loadTaiqReport(null, startDate, endDate);
+        filterSite.value = '';
+        filterKw.value   = '';
+        await loadTenders();
     }
 
     // ── TAiQ Sophisticated Scrape & Funnel Report Card ─────────────────────
@@ -254,7 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    async function loadTaiqReport(dateStr) {
+    async function loadTaiqReport(dateStr, startDate = null, endDate = null) {
         const dateLbl = document.getElementById('trc-date-label');
         const statusBadge = document.getElementById('trc-status-badge');
         const tilesContainer = document.getElementById('trc-stat-tiles');
@@ -263,9 +455,17 @@ document.addEventListener('DOMContentLoaded', () => {
         const funnelTotalLbl = document.getElementById('trc-funnel-total-lbl');
         const kwList = document.getElementById('trc-keyword-list');
 
-        if (dateLbl) dateLbl.textContent = _pretty(dateStr);
+        if (dateLbl) {
+            dateLbl.textContent = (startDate && endDate)
+                ? `${_pretty(startDate)} – ${_pretty(endDate)}`
+                : _pretty(dateStr);
+        }
 
-        const res = await authFetch(`/dashboard/taiq-report?date=${dateStr}`);
+        const url = (startDate && endDate)
+            ? `/dashboard/taiq-report?start_date=${startDate}&end_date=${endDate}`
+            : `/dashboard/taiq-report?date=${dateStr}`;
+
+        const res = await authFetch(url);
         if (!res) return;
         const data = await res.json();
         const run = data.run;
@@ -432,12 +632,12 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadDay(dateStr) {
         const isToday = dateStr === _fmtDate(today);
         dateLabel.textContent = isToday ? "Today's overview" : `Overview for ${_pretty(dateStr)}`;
-        // Reset filters whenever the date changes so the dropdown is clean
-        filterSite.value = '';
-        filterKw.value   = '';
         // Stats must finish first — it populates the site dropdown before tenders load
         await loadStats(dateStr);
         await loadTaiqReport(dateStr);
+        // Reset filters whenever the date changes so the dropdown is clean
+        filterSite.value = '';
+        filterKw.value   = '';
         await loadTenders();
     }
 
@@ -448,11 +648,21 @@ document.addEventListener('DOMContentLoaded', () => {
         taiq:   { icon: '🤖', label: 'TAiQ',   cls: 'scard-taiq'   },
     };
 
-    async function loadStats(dateStr) {
+    async function loadStats(dateStr, startDate = null, endDate = null) {
         statsRow.innerHTML = '';
         actWrap.innerHTML  = '<p class="empty-msg">Loading…</p>';
 
-        const res  = await authFetch(`/dashboard/stats?date=${dateStr}`);
+        const runActivitySection = document.getElementById('run-activity-section');
+        const isMultiDay = Boolean(startDate && endDate && startDate !== endDate);
+        if (runActivitySection) {
+            runActivitySection.style.display = isMultiDay ? 'none' : 'block';
+        }
+
+        const url = (startDate && endDate)
+            ? `/dashboard/stats?start_date=${startDate}&end_date=${endDate}`
+            : `/dashboard/stats?date=${dateStr}`;
+
+        const res  = await authFetch(url);
         if (!res) return;
         const data = await res.json();
 
@@ -501,11 +711,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             statsRow.innerHTML = totalCard + siteCards + runsCard + _lastUpdateCardHtml();
 
+            const currentVal = filterSite.value;
+            isUpdatingDropdown = true;
             filterSite.innerHTML = '<option value="">All Sites</option>' +
                 [...allSites].map(s => {
                     const lbl = _SITE_CFG[s]?.label || s.toUpperCase();
                     return `<option value="${s}">${lbl}</option>`;
                 }).join('');
+            filterSite.value = currentVal || '';
+            isUpdatingDropdown = false;
         }
 
         // ── Summary sentence ───────────────────────────────────────────────
@@ -513,12 +727,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (summaryEl) {
             if (grandTotal > 0) {
                 const numSites = siteTotals.length;
-                const isToday  = dateStr === _fmtDate(today);
+                const dateText = (startDate && endDate)
+                    ? `between ${_pretty(startDate)} and ${_pretty(endDate)}`
+                    : (dateStr === _fmtDate(today) ? 'today' : `on ${_pretty(dateStr)}`);
                 summaryEl.innerHTML =
                     `<strong>${grandTotal}</strong> tender${grandTotal !== 1 ? 's' : ''} found across ` +
                     `<strong>${numSites}</strong> site${numSites !== 1 ? 's' : ''} in ` +
                     `<strong>${data.sessions.length}</strong> run${data.sessions.length !== 1 ? 's' : ''} ` +
-                    (isToday ? 'today' : `on ${_pretty(dateStr)}`);
+                    dateText;
             } else {
                 summaryEl.textContent = '';
             }
@@ -618,16 +834,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadTenders() {
+        const reqId = ++currentTendersRequestId;
         tendersGrid.innerHTML = '<p class="empty-msg">Loading…</p>';
         const site    = filterSite.value;
         const keyword = filterKw.value.trim();
-        let url = `/dashboard/tenders?date=${selectedDate}`;
+        let url = (rangeStartDate && rangeEndDate)
+            ? `/dashboard/tenders?start_date=${rangeStartDate}&end_date=${rangeEndDate}`
+            : `/dashboard/tenders?date=${selectedDate || _fmtDate(today)}`;
         if (site)    url += `&site=${encodeURIComponent(site)}`;
         if (keyword) url += `&keyword=${encodeURIComponent(keyword)}`;
 
         const res = await authFetch(url);
-        if (!res) return;
+        if (!res || reqId !== currentTendersRequestId) return;
         const tenders = await res.json();
+        if (reqId !== currentTendersRequestId) return;
+        loadedTendersCache = tenders || [];
 
         if (!tenders || tenders.length === 0) {
             const isFiltered = filterSite.value || filterKw.value.trim();
@@ -641,6 +862,83 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         tendersGrid.innerHTML = tenders.map(t => _tenderCard(t)).join('');
+    }
+
+    // ── Tender Inspection Modal ─────────────────────────────────────────────
+    const tdModalOverlay = document.getElementById('td-modal-overlay');
+    const tdModalClose   = document.getElementById('td-modal-close');
+
+    if (tdModalClose) {
+        tdModalClose.addEventListener('click', () => {
+            if (tdModalOverlay) tdModalOverlay.style.display = 'none';
+        });
+    }
+    if (tdModalOverlay) {
+        tdModalOverlay.addEventListener('click', (e) => {
+            if (e.target === tdModalOverlay) tdModalOverlay.style.display = 'none';
+        });
+    }
+
+    function openTenderDetailModal(tenderId) {
+        const tender = loadedTendersCache.find(t => String(t.id) === String(tenderId));
+        if (!tender) return;
+
+        const titleEl = document.getElementById('td-modal-title');
+        const pillsEl = document.getElementById('td-modal-meta-pills');
+        const bodyEl  = document.getElementById('td-modal-body');
+
+        if (titleEl) titleEl.textContent = tender.title || 'Opportunity Details';
+
+        const rvStatus = tender.review_status || 'pending';
+        const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
+
+        if (pillsEl) {
+            pillsEl.innerHTML = `
+                <span class="site-badge site-${tender.site}">${(tender.site || '').toUpperCase()}</span>
+                <span class="kw-tag">${_escapeHtml(tender.keyword || '')}</span>
+                <span class="td-mpill td-mpill-${rvStatus}">${rvIcon} ${rvStatus}</span>
+                ${tender.source === 'taiq' ? '<span class="taiq-source-tag">🤖 TAiQ Auto</span>' : ''}
+            `;
+        }
+
+        const fields = tender.fields || {};
+        let fieldsGridHtml = '';
+        if (Object.keys(fields).length > 0) {
+            fieldsGridHtml = `
+                <div class="td-section-title">Summary & Extracted Fields</div>
+                <div class="td-fields-grid">
+                    ${Object.entries(fields).map(([k, v]) => `
+                        <div class="td-field-card">
+                            <span class="td-fc-label">${_escapeHtml(k)}</span>
+                            <span class="td-fc-val">${_escapeHtml(String(v))}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        let linksHtml = `<div class="td-actions-row">`;
+        if (tender.url) {
+            linksHtml += `<a href="${tender.url}" target="_blank" class="td-modal-btn primary-btn">View Source Page ↗</a>`;
+        }
+        if (tender.tender_dir) {
+            const dlUrl = `/download/tender?path=${encodeURIComponent(tender.tender_dir)}&token=${encodeURIComponent(getToken())}`;
+            linksHtml += `<a href="${dlUrl}" class="td-modal-btn secondary-btn" download>⬇ Download All Files</a>`;
+        }
+        linksHtml += `</div>`;
+
+        if (bodyEl) {
+            bodyEl.innerHTML = `
+                <div class="td-info-row">
+                    <span><strong>Found At:</strong> ${tender.found_at || '—'}</span>
+                    <span><strong>Published Date:</strong> ${tender.published_date || '—'}</span>
+                </div>
+                ${fieldsGridHtml}
+                ${linksHtml}
+            `;
+        }
+
+        if (tdModalOverlay) tdModalOverlay.style.display = 'flex';
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────
@@ -661,6 +959,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const rvChip   = `<span class="card-review-chip chip-${rvStatus}">${rvIcon} ${rvStatus}</span>`;
 
         let actionsHtml = `<div class="card-actions">`;
+        actionsHtml += `<button class="card-inspect-btn" data-id="${t.id}">🔍 Inspect</button>`;
         if (t.url) {
             actionsHtml += `<a href="${t.url}" target="_blank" class="card-link">View ↗</a>`;
         }
@@ -680,7 +979,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${taiqTag}
                     ${rvChip}
                 </div>
-                <h4>${t.title || 'Unknown Opportunity'}</h4>
+                <h4 style="cursor:pointer" onclick="openTenderDetailModal('${t.id}')">${t.title || 'Unknown Opportunity'}</h4>
                 <div class="card-fields">${fieldRows}</div>
                 ${actionsHtml}
             </div>
@@ -727,6 +1026,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     tendersGrid.addEventListener('click', e => {
+        const inspectBtn = e.target.closest('.card-inspect-btn');
+        if (inspectBtn) {
+            openTenderDetailModal(inspectBtn.dataset.id);
+            return;
+        }
         const btn = e.target.closest('.card-files-btn');
         if (btn) _toggleCardFiles(btn);
     });
@@ -736,7 +1040,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function _pretty(dateStr) {
-        const [y,m,d] = dateStr.split('-');
+        if (!dateStr || typeof dateStr !== 'string') return '—';
+        const parts = dateStr.split('-');
+        if (parts.length < 3) return dateStr;
+        const [y,m,d] = parts;
         const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
         return `${parseInt(d)} ${months[parseInt(m)-1]} ${y}`;
     }

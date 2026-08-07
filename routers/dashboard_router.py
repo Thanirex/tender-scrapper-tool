@@ -21,10 +21,12 @@ def _today() -> str:
 async def get_stats(
     request: Request,
     date: str = Query(default=None),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
     current_user: dict = _auth,
 ):
     team_id = current_user.get("team_id", "cnk")
-    return _db(request).get_stats_for_date(date or _today(), team_id=team_id)
+    return _db(request).get_stats_for_date(date_str=date, start_date=start_date, end_date=end_date, team_id=team_id)
 
 
 @router.get("/report")
@@ -42,11 +44,15 @@ async def get_report(
 async def get_tenders(
     request: Request,
     date: str = Query(default=None),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
     site: str = Query(default=None),
     keyword: str = Query(default=None),
     current_user: dict = _auth,
 ):
     team_id = current_user.get("team_id", "cnk")
+    if start_date:
+        return _db(request).get_tenders_for_date_range(start_date, end_date or start_date, site, keyword, team_id=team_id)
     return _db(request).get_tenders_for_date(date or _today(), site, keyword, team_id=team_id)
 
 
@@ -63,8 +69,10 @@ async def get_dates(
 async def get_taiq_report(
     request: Request,
     date: str = Query(default=None),
+    start_date: str = Query(default=None),
+    end_date: str = Query(default=None),
     current_user: dict = _auth,
 ):
     """Detailed TAiQ run analytics, rejection funnel, per-site health, and keyword leaderboard."""
     team_id = current_user.get("team_id", "cnk")
-    return _db(request).get_taiq_detailed_report(date_str=date, team_id=team_id)
+    return _db(request).get_taiq_detailed_report(date_str=date, start_date=start_date, end_date=end_date, team_id=team_id)
