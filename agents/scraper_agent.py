@@ -154,6 +154,14 @@ class ScraperAgent:
 
                         current_url = page.url
 
+                        try:
+                            title = page.locator(site['tender_title_selector']).first.text_content().strip()
+                        except Exception:
+                            try:
+                                title = page.locator("h1, h2").first.text_content().strip()
+                            except Exception:
+                                title = f"Result_{i+1}"
+
                         # DevNet uses ASP.NET postbacks — page.url never changes after click.
                         # Try multiple strategies to get a stable, shareable job URL.
                         if "devnetjobs" in current_url.lower() and "job_id=" not in current_url:
@@ -162,13 +170,15 @@ class ScraperAgent:
                             # Strategy 1: any anchor on the detail page whose href has job_id=
                             if not job_url:
                                 try:
-                                    hrefs = page.eval_on_selector_all(
+                                    # Local name — must not shadow the outer `hrefs`
+                                    # list of result links driving this loop.
+                                    job_hrefs = page.eval_on_selector_all(
                                         "a[href*='job_id']",
                                         "els => els.map(e => e.href)"
                                         ".filter(h => h.includes('job_id='))"
                                     )
-                                    if hrefs:
-                                        job_url = hrefs[0]
+                                    if job_hrefs:
+                                        job_url = job_hrefs[0]
                                 except Exception:
                                     pass
 
@@ -198,14 +208,6 @@ class ScraperAgent:
                                 current_url = job_url
                             else:
                                 log(f"   ⚠️ Could not find a stable job URL for '{title[:55]}' — link may not work")
-
-                        try:
-                            title = page.locator(site['tender_title_selector']).first.text_content().strip()
-                        except Exception:
-                            try:
-                                title = page.locator("h1, h2").first.text_content().strip()
-                            except Exception:
-                                title = f"Result_{i+1}"
 
                         # ── Keyword relevance check ──────────────────────────────
                         if not keyword_matches(keyword, title):
@@ -272,7 +274,7 @@ class ScraperAgent:
 
                         # Mark in DB so other keywords don't re-download the same tender
                         if db:
-                            db.mark_downloaded(title, current_url, site_key, keyword, pub_date)
+                            db.mark_downloaded(title, current_url, site_key, keyword, pub_date, team_id=team_id)
 
                         rec = {
                             "title": title,
@@ -293,7 +295,7 @@ class ScraperAgent:
                 log(
                     f"   📊 '{keyword}' summary on {site_key}: {total} result(s) → "
                     f"{n_title_miss} without the keyword in the title, "
-                    f"{n_neg} blocked by negative keywords, {n_stale} older than 24h, "
+                    f"{n_neg} blocked by negative keywords, {n_stale} older than {max_age_hours}h, "
                     f"{n_no_date} missing a publish date, {n_dup} already collected, "
                     f"{n_err} errored, {len(results)} saved"
                 )

@@ -193,7 +193,7 @@ class FHI360ScraperAgent:
                             log(f"      📝 Text saved alongside files")
 
                     if db:
-                        db.mark_downloaded(title, url, "fhi360", keyword, sol.get("closing_date", ""))
+                        db.mark_downloaded(title, url, "fhi360", keyword, sol.get("closing_date", ""), team_id=team_id)
 
                     rec = {
                         "keyword":    keyword,

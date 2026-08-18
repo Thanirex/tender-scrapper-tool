@@ -1606,9 +1606,15 @@ class CronDBProxy:
         self.run_id  = run_id
         self.team_id = team_id or "cnk"
 
-    def is_duplicate(self, title: str, url: str = "") -> bool:
-        return self._db.is_cron_duplicate(title, url, team_id=self.team_id)
+    # NOTE: agents call these with an explicit team_id= (the same signature
+    # TenderDB exposes), so both methods must accept it or every result row
+    # dies with "unexpected keyword argument 'team_id'".  The proxy is already
+    # bound to one team's run, so a caller-supplied team_id is only honoured
+    # when given and otherwise falls back to the run's own team.
+    def is_duplicate(self, title: str, url: str = "", team_id: str = None) -> bool:
+        return self._db.is_cron_duplicate(title, url, team_id=team_id or self.team_id)
 
     def mark_downloaded(self, title: str, url: str, site: str,
-                        keyword: str, published_date: str = ""):
-        self._db.mark_cron_seen(title, url, site, keyword, published_date, team_id=self.team_id)
+                        keyword: str, published_date: str = "", team_id: str = None):
+        self._db.mark_cron_seen(title, url, site, keyword, published_date,
+                                team_id=team_id or self.team_id)

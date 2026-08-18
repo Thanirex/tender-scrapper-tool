@@ -298,7 +298,7 @@ class CHAIScraperAgent:
                     log(f"      📝 Page text also saved")
 
             if db:
-                db.mark_downloaded(title, url, "chai", keyword, "")
+                db.mark_downloaded(title, url, "chai", keyword, "", team_id=team_id)
 
             return {
                 "keyword":    keyword,

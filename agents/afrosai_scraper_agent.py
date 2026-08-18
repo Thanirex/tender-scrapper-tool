@@ -106,7 +106,7 @@ _JS_COLLECT = """
 class AfrosaiScraperAgent:
     PAGE_URL = "https://afrosai-e.org.za/tenders/"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -150,7 +150,7 @@ class AfrosaiScraperAgent:
                         n_miss += 1
                         continue
 
-                    neg = find_negative_keyword(title, text)
+                    neg = find_negative_keyword(title, text, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
@@ -158,7 +158,7 @@ class AfrosaiScraperAgent:
 
                     url = links[0] if links else self.PAGE_URL
 
-                    if db and db.is_duplicate(title, url):
+                    if db and db.is_duplicate(title, url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
@@ -188,7 +188,7 @@ class AfrosaiScraperAgent:
                             log(f"      📝 Entry text also saved")
 
                     if db:
-                        db.mark_downloaded(title, url, "afrosai", keyword, tender.get("deadline", ""))
+                        db.mark_downloaded(title, url, "afrosai", keyword, tender.get("deadline", ""), team_id=team_id)
 
                     rec = {
                         "keyword":    keyword,

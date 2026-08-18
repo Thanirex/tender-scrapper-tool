@@ -276,7 +276,7 @@ class UNGMScraperAgent:
                 log(f"      🚫 Skipping '{title[:60]}' — keyword '{keyword}' not in title")
                 return None
 
-            neg = find_negative_keyword(title)
+            neg = find_negative_keyword(title, team_id=team_id)
             if neg:
                 _bump("neg")
                 log(f"      🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
@@ -308,7 +308,7 @@ class UNGMScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 _bump("neg")
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")

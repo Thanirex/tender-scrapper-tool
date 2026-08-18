@@ -245,7 +245,7 @@ class JSIScraperAgent:
                     log(f"      📝 Page text also saved")
 
             if db:
-                db.mark_downloaded(title, url, "jsi", keyword, due_str)
+                db.mark_downloaded(title, url, "jsi", keyword, due_str, team_id=team_id)
 
             return {
                 "keyword":    keyword,

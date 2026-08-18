@@ -199,11 +199,11 @@ class DRCScraperAgent:
             body_text = re.sub(r"[ \t]+", " ", body_text)
             body_text = re.sub(r"\n{3,}", "\n\n", body_text).strip()
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:
-                    db.mark_downloaded(title, url, "drc", keyword, deadline)
+                    db.mark_downloaded(title, url, "drc", keyword, deadline, team_id=team_id)
                 return None
 
             # Collect document links from the copy section
@@ -261,7 +261,7 @@ class DRCScraperAgent:
                     log(f"      📝 Page text also saved")
 
             if db:
-                db.mark_downloaded(title, url, "drc", keyword, deadline)
+                db.mark_downloaded(title, url, "drc", keyword, deadline, team_id=team_id)
 
             return {
                 "keyword":    keyword,

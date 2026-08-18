@@ -359,7 +359,7 @@ class WorldBankScraperAgent:
                     log(f"      📝 Page text also saved")
 
             if db:
-                db.mark_downloaded(title, url, "worldbank", keyword, "")
+                db.mark_downloaded(title, url, "worldbank", keyword, "", team_id=team_id)
 
             return {
                 "keyword":    keyword,

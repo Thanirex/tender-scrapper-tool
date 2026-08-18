@@ -13,7 +13,7 @@ from keyword_utils import keyword_matches, find_negative_keyword
 class NasscomScraperAgent:
     PAGE_URL = "https://www.nasscomfoundation.org/requestproposal"
 
-    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None):
+    def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -49,7 +49,7 @@ class NasscomScraperAgent:
                             n_title_miss += 1
                             continue
 
-                        neg = find_negative_keyword(title)
+                        neg = find_negative_keyword(title, team_id=team_id)
                         if neg:
                             n_neg += 1
                             log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
@@ -67,7 +67,7 @@ class NasscomScraperAgent:
                         pdf_url = pdf_links[-1]
 
                         # Dedup by PDF URL — title alone could collide across keywords
-                        if db and db.is_duplicate(title, pdf_url):
+                        if db and db.is_duplicate(title, pdf_url, team_id=team_id):
                             n_dup += 1
                             log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                             continue
@@ -92,7 +92,7 @@ class NasscomScraperAgent:
                             continue
 
                         if db:
-                            db.mark_downloaded(title, pdf_url, "nasscom", keyword, "")
+                            db.mark_downloaded(title, pdf_url, "nasscom", keyword, "", team_id=team_id)
 
                         rec = {
                             "keyword":    keyword,

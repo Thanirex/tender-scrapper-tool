@@ -3,7 +3,17 @@
     "allow": [
       "PowerShell($py = \"C:\\\\Users\\\\Thaneesh\\\\Documents\\\\GitHub\\\\Tender Scrapper tool old\\\\.venv\\\\Scripts\\\\python.exe\"; $base = \"C:\\\\Users\\\\Thaneesh\\\\Documents\\\\GitHub\\\\Tender Scrapper tool old\"; $files = @\\(\"db.py\",\"cron_runner.py\",\"routers\\\\taiq_router.py\"\\); foreach \\($f in $files\\) { $result = & $py -m py_compile \"$base\\\\$f\" 2>&1; if \\($result\\) { Write-Host \"FAIL $f`: $result\" } else { Write-Host \"OK   $f\" } })",
       "Bash(.venv/Scripts/python.exe -m py_compile agents/scraper_agent.py agents/acbf_scraper_agent.py agents/afrosai_scraper_agent.py agents/au_scraper_agent.py agents/chai_scraper_agent.py agents/drc_scraper_agent.py agents/fhi360_scraper_agent.py agents/gatsby_africa_scraper_agent.py agents/jsi_scraper_agent.py agents/nasscom_scraper_agent.py agents/trademark_africa_scraper_agent.py agents/ungm_scraper_agent.py agents/worldbank_scraper_agent.py agents/reliefweb_scraper_agent.py)",
-      "PowerShell(py *)"
+      "PowerShell(py *)",
+      "Bash(./.venv/Scripts/python.exe -c ' *)",
+      "Bash(./.venv/Scripts/python.exe -m pyflakes agents/*.py *.py routers/*.py)",
+      "Bash(./.venv/Scripts/python.exe -m pip install pyflakes -q)",
+      "Bash(./.venv/Scripts/python.exe -m py_compile agents/*.py *.py routers/*.py)",
+      "Bash(./.venv/Scripts/python.exe \"C:/Users/Thaneesh/AppData/Local/Temp/claude/C--Users-Thaneesh-Documents-GitHub-Tender-Scrapper-tool-old/240e351a-22c4-4c32-b71a-c7823c77654e/scratchpad/verify_cron.py\")",
+      "Bash(PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe \"C:/Users/Thaneesh/AppData/Local/Temp/claude/C--Users-Thaneesh-Documents-GitHub-Tender-Scrapper-tool-old/240e351a-22c4-4c32-b71a-c7823c77654e/scratchpad/verify_cron.py\")",
+      "Bash(sed -n '1,25p;/====/,$p')",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(TENDER_DATA_DIR=C:/Users/Thaneesh/AppData/Local/Temp/claude/C--Users-Thaneesh-Documents-GitHub-Tender-Scrapper-tool-old/240e351a-22c4-4c32-b71a-c7823c77654e/scratchpad/apptest DATABASE_URL='' ./.venv/Scripts/python.exe -c ' *)",
+      "Bash(TENDER_DATA_DIR=C:/Users/Thaneesh/AppData/Local/Temp/claude/C--Users-Thaneesh-Documents-GitHub-Tender-Scrapper-tool-old/240e351a-22c4-4c32-b71a-c7823c77654e/scratchpad/apptest DATABASE_URL='' PYTHONIOENCODING=utf-8 ./.venv/Scripts/python.exe -c ' *)"
     ]
   }
 }

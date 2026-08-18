@@ -178,7 +178,7 @@ class TradeMarkAfricaScraperAgent:
             log(f"      📝 Page text saved alongside {len(downloaded)} document(s)")
 
         if db:
-            db.mark_downloaded(title, url, "trademarkafrica", keyword, deadline)
+            db.mark_downloaded(title, url, "trademarkafrica", keyword, deadline, team_id=team_id)
 
         return {
             "keyword":    keyword,

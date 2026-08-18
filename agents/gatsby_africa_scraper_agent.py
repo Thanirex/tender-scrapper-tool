@@ -304,7 +304,7 @@ class GatsbyAfricaScraperAgent:
                     log(f"      📝 Page text also saved")
 
             if db:
-                db.mark_downloaded(title, url, "gatsbyafrica", keyword, "")
+                db.mark_downloaded(title, url, "gatsbyafrica", keyword, "", team_id=team_id)
 
             return {
                 "keyword":    keyword,

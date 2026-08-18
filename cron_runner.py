@@ -13,6 +13,8 @@ logger = logging.getLogger("taiq.cron")
 _scheduler      = None
 _db             = None
 _stop_event     = threading.Event()
+# Guards the module-level run state below — only one daily job at a time.
+_run_lock       = threading.Lock()
 _current_run_id: "int | None" = None
 _current_team_id: "str | None" = None
 _stats          = None   # run_stats.RunStatsCollector for the active run
@@ -153,6 +155,25 @@ def _load_all_keywords(team_id: str = "cnk") -> list:
 
 def run_daily_job(team_id: str = "cnk"):
     """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team."""
+    # Only one run may own the module-level state (_current_run_id, _stats,
+    # _log_buffer, _log_file_path, _stop_event) at a time.  Without this,
+    # a second run entering here calls _stop_event.clear() and _reset_log(),
+    # which truncates the first run's log file and steals its stats collector.
+    if not _run_lock.acquire(blocking=False):
+        logger.warning(
+            f"[TAiQ Cron] Run for team {team_id} skipped — "
+            f"run #{_current_run_id} ({_current_team_id}) is still in progress."
+        )
+        return
+
+    try:
+        _run_daily_job_locked(team_id)
+    finally:
+        _run_lock.release()
+
+
+def _run_daily_job_locked(team_id: str):
+    """Body of run_daily_job — callers must hold _run_lock."""
     global _current_run_id, _current_team_id, _stats
 
     from paths import DOWNLOADS_DIR, APP_DIR
@@ -168,9 +189,10 @@ def run_daily_job(team_id: str = "cnk"):
     email    = os.getenv("UNGM_EMAIL", "").strip()
     password = os.getenv("UNGM_PASSWORD", "")
 
-    if not email or not password:
-        logger.error("[TAiQ Cron] UNGM_EMAIL or UNGM_PASSWORD not set — job aborted.")
-        return
+    # UNGM moved to one-time login codes, so headless login can fail or the
+    # credentials may be pulled from .env entirely.  That must NOT abort the
+    # whole run — every other site still has to be scraped.
+    ungm_enabled = bool(email and password)
 
     keywords = _load_all_keywords(team_id)
     if not keywords:
@@ -189,9 +211,13 @@ def run_daily_job(team_id: str = "cnk"):
     except Exception as cfg_err:
         logger.warning(f"[TAiQ Cron] Could not load sites_config for team {team_id}: {cfg_err}")
 
-    num_sites   = 1 + len(standard_sites)          # 1 = UNGM + rest
+    if not ungm_enabled and not standard_sites:
+        logger.error(f"[TAiQ Cron] No scrapable sites for team {team_id} — job aborted.")
+        return
+
+    num_sites   = (1 if ungm_enabled else 0) + len(standard_sites)
     total_kw    = len(keywords) * num_sites
-    site_labels = ["UNGM"] + [s.upper() for s in standard_sites]
+    site_labels = (["UNGM"] if ungm_enabled else []) + [s.upper() for s in standard_sites]
 
     run_id          = _db.create_cron_run(total_keywords=total_kw, team_id=team_id)
     _current_run_id = run_id
@@ -248,7 +274,13 @@ def run_daily_job(team_id: str = "cnk"):
     try:
         # ── Phase 1: UNGM ──────────────────────────────────────────────────────
         ungm_run_dir = run_dir / "ungm"
-        _write_log(f"🌐 Phase 1 / {num_sites} — UNGM ({len(keywords)} keywords)")
+        if ungm_enabled:
+            _write_log(f"🌐 Phase 1 / {num_sites} — UNGM ({len(keywords)} keywords)")
+        else:
+            _write_log(
+                "⏭️ Skipping UNGM — UNGM_EMAIL/UNGM_PASSWORD not set. "
+                "All other sites will still be scraped."
+            )
 
         def on_ungm_tender_ready(res: dict):
             nonlocal total_tenders
@@ -340,13 +372,14 @@ def run_daily_job(team_id: str = "cnk"):
             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
             _check_stop()
 
-        ungm_agent = UNGMScraperAgent()
-        _run_step_safely("UNGM", lambda: ungm_agent.scrape(
-            email, password, keywords, str(ungm_run_dir),
-            headless=True, log_callback=_progress_log,
-            on_tender_ready=on_ungm_tender_ready, db=proxy,
-            team_id=team_id,
-        ))
+        if ungm_enabled:
+            ungm_agent = UNGMScraperAgent()
+            _run_step_safely("UNGM", lambda: ungm_agent.scrape(
+                email, password, keywords, str(ungm_run_dir),
+                headless=True, log_callback=_progress_log,
+                on_tender_ready=on_ungm_tender_ready, db=proxy,
+                team_id=team_id,
+            ))
 
         # ── Phase 2+: Standard sites ───────────────────────────────────────────
         if standard_sites and not _stop_event.is_set():
@@ -383,7 +416,7 @@ def run_daily_job(team_id: str = "cnk"):
             idi_agent          = IDIScraperAgent()
             lic_agent          = LICScraperAgent()
 
-            for phase_idx, site_key in enumerate(standard_sites, start=2):
+            for phase_idx, site_key in enumerate(standard_sites, start=2 if ungm_enabled else 1):
                 if _stop_event.is_set():
                     break
 
@@ -468,6 +501,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_nasscom_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "au":
@@ -598,6 +632,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_acbf_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "trademarkafrica":
@@ -669,6 +704,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_tma_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "fhi360":
@@ -740,6 +776,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_fhi360_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "gatsbyafrica":
@@ -811,6 +848,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_gatsby_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "afrosai":
@@ -882,6 +920,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_afrosai_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "drc":
@@ -1025,6 +1064,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_jsi_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "chai":
@@ -1299,6 +1339,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_wb_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "idi":
@@ -1370,6 +1411,7 @@ def run_daily_job(team_id: str = "cnk"):
                             log_callback=_progress_log,
                             on_result_ready=on_idi_result,
                             db=proxy,
+                            team_id=team_id,
                         ))
 
                     elif scraper_type == "lic":
@@ -1585,7 +1627,7 @@ def _check_and_fire_if_needed():
     # CNK catch-up check: past 7:00 AM IST and CNK has not run today
     if now_ist.hour >= 7:
         cnk_run = _db.get_cron_run_by_date(today_str, team_id="cnk")
-        if not cnk_run:
+        if not cnk_run and _current_run_id is None:
             logger.info("[TAiQ Cron] Catch-up: past 7am IST with no CNK run today — firing CNK job")
             threading.Thread(
                 target=run_daily_job, args=("cnk",), daemon=True, name="taiq-catchup-cnk"
@@ -1645,7 +1687,6 @@ def init_scheduler(db):
 
 
 def shutdown_scheduler():
-    global _scheduler
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
         logger.info("[TAiQ Cron] Scheduler stopped")

@@ -52,7 +52,7 @@ class AUScraperAgent:
                         n_title_miss += 1
                         continue
 
-                    neg = find_negative_keyword(title)
+                    neg = find_negative_keyword(title, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
@@ -188,7 +188,7 @@ class AUScraperAgent:
             except Exception:
                 body_text = ""
 
-            neg = find_negative_keyword(title, body_text)
+            neg = find_negative_keyword(title, body_text, team_id=team_id)
             if neg:
                 log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
                 if db:

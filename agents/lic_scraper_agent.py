@@ -166,7 +166,7 @@ class LICScraperAgent:
                         n_miss += 1
                         continue
 
-                    neg = find_negative_keyword(title, row_text)
+                    neg = find_negative_keyword(title, row_text, team_id=team_id)
                     if neg:
                         n_neg += 1
                         log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
@@ -189,7 +189,7 @@ class LICScraperAgent:
                     # Website webpage URL to show for viewing (NOT raw PDF)
                     webpage_url = detail_url if detail_url else self.PAGE_URL
 
-                    if db and db.is_duplicate(title, webpage_url):
+                    if db and db.is_duplicate(title, webpage_url, team_id=team_id):
                         n_dup += 1
                         log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
                         continue
@@ -233,7 +233,7 @@ class LICScraperAgent:
                         log(f"      📝 Entry text also saved")
 
                     if db:
-                        db.mark_downloaded(title, webpage_url, "lic", keyword, pub_date or deadline)
+                        db.mark_downloaded(title, webpage_url, "lic", keyword, pub_date or deadline, team_id=team_id)
 
                     rec = {
                         "keyword":        keyword,

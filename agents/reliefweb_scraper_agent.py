@@ -85,7 +85,7 @@ class ReliefWebScraperAgent:
                     n_title_miss += 1
                     continue
 
-                neg = find_negative_keyword(title)
+                neg = find_negative_keyword(title, team_id=team_id)
                 if neg:
                     n_neg += 1
                     log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}' in title")
@@ -222,7 +222,7 @@ class ReliefWebScraperAgent:
 
         body_text = self._page_text(page)
 
-        neg = find_negative_keyword(title, body_text)
+        neg = find_negative_keyword(title, body_text, team_id=team_id)
         if neg:
             log(f"      🚫 Rejected '{title[:60]}' — negative keyword '{neg}' found on page")
             if db:
@@ -248,7 +248,7 @@ class ReliefWebScraperAgent:
         log(f"      📝 Page content saved ({len(body_text):,} chars)")
 
         if db:
-            db.mark_downloaded(title, url, "reliefweb", keyword, posted)
+            db.mark_downloaded(title, url, "reliefweb", keyword, posted, team_id=team_id)
 
         return {
             "keyword":    keyword,
