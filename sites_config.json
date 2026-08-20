@@ -146,5 +146,11 @@
         "scraper_type": "lic",
         "display_name": "LIC Tenders (Life Insurance Corporation)",
         "skip_date_filter": false
+    },
+    "isa": {
+        "url": "https://isa.int/procurement",
+        "scraper_type": "isa",
+        "display_name": "International Solar Alliance (ISA) Procurement",
+        "skip_date_filter": true
     }
 }

@@ -140,5 +140,11 @@
         "scraper_type": "idi",
         "display_name": "IDI Tenders & Calls for Proposals",
         "skip_date_filter": true
+    },
+    "isa": {
+        "url": "https://isa.int/procurement",
+        "scraper_type": "isa",
+        "display_name": "International Solar Alliance (ISA) Procurement",
+        "skip_date_filter": true
     }
 }
