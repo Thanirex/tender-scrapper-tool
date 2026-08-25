@@ -146,5 +146,11 @@
         "scraper_type": "isa",
         "display_name": "International Solar Alliance (ISA) Procurement",
         "skip_date_filter": true
+    },
+    "mercycorps": {
+        "url": "https://www.mercycorps.org/tenders",
+        "scraper_type": "mercycorps",
+        "display_name": "Mercy Corps Tenders (RFPs)",
+        "skip_date_filter": true
     }
 }
