@@ -1043,14 +1043,44 @@ class TenderDB:
                         counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
                 decided = counts["approved"] + counts["rejected"]
 
+                # ── Documents on disk ──────────────────────────────────────
+                # "Downloaded" means the tender has its document folder/files
+                # saved. TAiQ records that as a tender_dir; manual sessions
+                # register each file in tender_documents.
+                dl_sql = """SELECT COUNT(*) AS n FROM cron_tenders
+                            WHERE found_at LIKE ?
+                              AND tender_dir IS NOT NULL AND tender_dir <> ''"""
+                dl_params = [like]
+                if team_id:
+                    dl_sql += " AND team_id = ?"
+                    dl_params.append(team_id)
+                downloaded = conn.execute(dl_sql, dl_params).fetchone()["n"]
+
+                md_sql = """SELECT COUNT(DISTINCT ft.id) AS n
+                            FROM found_tenders ft
+                            JOIN tender_documents td ON td.tender_id = ft.id
+                            JOIN search_sessions s   ON s.id = ft.session_id
+                            WHERE s.run_date = ?"""
+                md_params = [d]
+                if team_id:
+                    md_sql += " AND s.team_id = ?"
+                    md_params.append(team_id)
+                try:
+                    downloaded += conn.execute(md_sql, md_params).fetchone()["n"]
+                except Exception:
+                    pass
+
                 report.append({
                     "date":            d,
                     "scraped":         taiq_count + manual_count,
                     "taiq":            taiq_count,
                     "manual":          manual_count,
                     "taiq_status":     cron_row["status"] if cron_row else None,
+                    "keywords":        ((cron_row["total_keywords"] or 0)
+                                        if cron_row else 0),
                     "sites_scanned":   len(scanned),
                     "sites_with_results": len(produced),
+                    "downloaded":      downloaded,
                     "approved":        counts["approved"],
                     "rejected":        counts["rejected"],
                     "pending":         counts["pending"],

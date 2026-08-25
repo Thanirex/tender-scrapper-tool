@@ -51,12 +51,19 @@ def _site_display_names(team_id: str) -> dict:
     return names
 
 
+def _label_rows(rows, names: dict):
+    """Attach display_name to any list of dicts carrying a `site` key."""
+    for row in rows or []:
+        if isinstance(row, dict) and "site" in row:
+            key = str(row.get("site") or "").lower()
+            row["display_name"] = names.get(key) or key.upper()
+
+
 def _label_sites(payload: dict, team_id: str) -> dict:
-    """Attach a human display_name to every entry of a by_site payload."""
+    """Attach a human display_name to every site-bearing row of a payload."""
     names = _site_display_names(team_id)
-    for row in payload.get("by_site") or []:
-        key = str(row.get("site", "")).lower()
-        row["display_name"] = names.get(key) or key.upper()
+    _label_rows(payload.get("by_site"), names)
+    _label_rows(payload.get("sessions"), names)
     return payload
 
 
@@ -98,8 +105,15 @@ async def get_tenders(
 ):
     team_id = current_user.get("team_id", "cnk")
     if start_date:
-        return _db(request).get_tenders_for_date_range(start_date, end_date or start_date, site, keyword, team_id=team_id)
-    return _db(request).get_tenders_for_date(date or _today(), site, keyword, team_id=team_id)
+        tenders = _db(request).get_tenders_for_date_range(
+            start_date, end_date or start_date, site, keyword, team_id=team_id
+        )
+    else:
+        tenders = _db(request).get_tenders_for_date(
+            date or _today(), site, keyword, team_id=team_id
+        )
+    _label_rows(tenders, _site_display_names(team_id))
+    return tenders
 
 
 @router.get("/dates")

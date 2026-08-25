@@ -151,13 +151,15 @@ document.addEventListener('DOMContentLoaded', () => {
             const sub      = names[i] ? _pretty(d.date) : '';
             const reviewed = d.approved + d.rejected;
             const pct      = d.scraped ? Math.round(100 * reviewed / d.scraped) : 0;
+            const downloaded = d.downloaded ?? 0;
+            const dlPct    = d.scraped ? Math.round(100 * downloaded / d.scraped) : 0;
             const chipMap  = {
-                complete: ['🤖 auto-run done', 'drc-chip-complete'],
-                running:  ['🤖 running now',   'drc-chip-running'],
-                failed:   ['🤖 run failed',    'drc-chip-failed'],
-                stopped:  ['🤖 run stopped',   'drc-chip-stopped'],
+                complete: ['Run complete', 'drc-chip-complete'],
+                running:  ['Running now',  'drc-chip-running'],
+                failed:   ['Run failed',   'drc-chip-failed'],
+                stopped:  ['Run stopped',  'drc-chip-stopped'],
             };
-            const [chipLbl, chipCls] = chipMap[d.taiq_status] || ['🤖 no auto run', 'drc-chip-none'];
+            const [chipLbl, chipCls] = chipMap[d.taiq_status] || ['No data run', 'drc-chip-none'];
             return `
             <div class="day-report-card${i === 0 ? ' drc-today' : ''}">
                 <div class="drc-head">
@@ -168,8 +170,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="drc-num">${d.scraped}</span>
                     <span class="drc-num-label">tender${d.scraped !== 1 ? 's' : ''} scraped</span>
                 </div>
-                <div class="drc-line">🤖 ${d.taiq} TAiQ &nbsp;·&nbsp; 👤 ${d.manual} manual</div>
-                <div class="drc-line">🌐 ${d.sites_scanned} site${d.sites_scanned !== 1 ? 's' : ''} scanned · ${d.sites_with_results} gave results</div>
+                <div class="drc-line">🤖 TAiQ: <b>${d.taiq}</b> &nbsp;·&nbsp; 👤 Manual: <b>${d.manual}</b></div>
+                <div class="drc-line">🌐 Sites scanned: <b>${d.sites_scanned}</b> &nbsp;·&nbsp; Keywords: <b>${d.keywords ?? 0}</b></div>
                 <div class="drc-review">
                     <span class="drc-rv drc-rv-app" title="Approved">✅ ${d.approved}</span>
                     <span class="drc-rv drc-rv-rej" title="Rejected">❌ ${d.rejected}</span>
@@ -177,10 +179,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${d.approval_rate !== null && d.approval_rate !== undefined
                         ? `<span class="drc-rv-rate">${d.approval_rate}% approved</span>` : ''}
                 </div>
-                <div class="drc-bar-track" title="${pct}% of this day's tenders reviewed">
-                    <div class="drc-bar-fill" style="width:${pct}%"></div>
+                <div class="drc-bars">
+                    <div class="drc-bar-track" title="${pct}% of this day's tenders reviewed">
+                        <div class="drc-bar-fill" style="width:${pct}%"></div>
+                    </div>
+                    <div class="drc-bar-label">${reviewed} of ${d.scraped} reviewed</div>
+                    <div class="drc-bar-track" title="${dlPct}% of this day's tenders have documents saved">
+                        <div class="drc-bar-fill drc-bar-fill-dl" style="width:${dlPct}%"></div>
+                    </div>
+                    <div class="drc-bar-label">${downloaded} of ${d.scraped} downloaded</div>
                 </div>
-                <div class="drc-bar-label">${reviewed} of ${d.scraped} reviewed</div>
             </div>`;
         }).join('');
     }
@@ -465,6 +473,35 @@ document.addEventListener('DOMContentLoaded', () => {
         return _SITE_CFG[key]?.label || row.display_name || key.toUpperCase();
     }
 
+    // Config display names are descriptive ("Mercy Corps Tenders (RFPs)") and
+    // too long for a stat card or a badge, so trim them down to the org name.
+    const _GENERIC_TAIL = /\s+(tenders?|procurement|solicitations?|bids?|jobs?|rfps?|eois?)$/i;
+
+    function _siteShortLabel(row) {
+        const key = String(row.site || '').toLowerCase();
+        if (_SITE_CFG[key]) return _SITE_CFG[key].label;
+
+        let name = String(row.display_name || key.toUpperCase());
+
+        // A mid-string all-caps acronym is the name people actually use —
+        // "International Solar Alliance (ISA) Procurement" → "ISA". A trailing
+        // bracket is a category ("… (RFPs)"), so it is dropped instead.
+        const acronym = name.match(/\(([A-Z0-9]{2,6})\)(?!\s*$)/);
+        if (acronym) return acronym[1];
+
+        name = name.split(' (')[0].split(' — ')[0].split(' & ')[0].trim();
+        while (_GENERIC_TAIL.test(name)) name = name.replace(_GENERIC_TAIL, '').trim();
+        if (!name) name = key.toUpperCase();
+
+        if (name.length > 24) {
+            const words = name.split(/\s+/);
+            // An all-caps leading token is the org's own short name.
+            if (/^[A-Z0-9-]{2,10}$/.test(words[0])) return words[0];
+            name = words.slice(0, 3).join(' ');
+        }
+        return name.length > 24 ? name.slice(0, 23).trimEnd() + '…' : name;
+    }
+
     async function loadStats(dateStr, startDate = null, endDate = null) {
         statsRow.innerHTML = '';
         actWrap.innerHTML  = '<p class="empty-msg">Loading…</p>';
@@ -503,13 +540,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="sc2-icon">📊</div>
                     <span class="sc2-num">${grandTotal}</span>
                     <span class="sc2-label">Total Tenders</span>
+                    <span class="sc2-sub">All time</span>
                     <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
                 </div>`;
 
             const siteCards = siteTotals.map(s => {
                 const key = String(s.site || '').toLowerCase();
                 const cfg = _SITE_CFG[key];
-                const label = _siteLabel(s);
+                const label = _siteShortLabel(s);
                 const icon = cfg?.icon || '📌';
                 const pct = grandTotal > 0 ? Math.max(Math.round((s.count / grandTotal) * 100), 5) : 5;
                 // Sites without a bespoke class get their accent inline, so they
@@ -519,7 +557,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="stat-card-v2 ${cfg?.cls || 'scard-generic'}"${accent}>
                         <div class="sc2-icon">${icon}</div>
                         <span class="sc2-num">${s.count}</span>
-                        <span class="sc2-label" title="${_escapeHtml(label)}">${_escapeHtml(label)}</span>
+                        <span class="sc2-label" title="${_escapeHtml(_siteLabel(s))}">${_escapeHtml(label)}</span>
+                        <span class="sc2-sub">All time</span>
                         <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:${pct}%"></div></div>
                     </div>`;
             }).join('');
@@ -529,6 +568,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="sc2-icon">▶</div>
                     <span class="sc2-num">${data.sessions.length}</span>
                     <span class="sc2-label">Runs</span>
+                    <span class="sc2-sub">Selected period</span>
                     <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
                 </div>`;
 
@@ -607,7 +647,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <td style="white-space:nowrap">
                                     ${_statusDot(s)}<strong>${s.source === 'taiq' ? '🤖 ' : ''}${s.username}</strong>
                                 </td>
-                                <td><span class="site-badge site-${s.site}">${(_SITE_CFG[s.site]?.label || s.site).toUpperCase()}</span></td>
+                                <td><span class="site-badge site-${s.site}" title="${_escapeHtml(_siteLabel(s))}">${_escapeHtml(_siteShortLabel(s))}</span></td>
                                 <td class="keywords-cell">${_truncKw(s.keywords)}</td>
                                 <td style="text-align:center"><strong>${s.tenders_found}</strong></td>
                                 <td class="time-cell">${_timeOnly(s.created_at)}</td>
@@ -638,7 +678,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const rows = sites.map(s => {
             const pct   = Math.max(Math.round((s.count / total) * 100), 4);
             const color = _siteColor(String(s.site || '').toLowerCase());
-            const label = _siteLabel(s);
+            const label = _siteShortLabel(s);
             return `
                 <div class="sbd-row">
                     <span class="sbd-site-label" title="${_escapeHtml(label)}">${_escapeHtml(label)}</span>
@@ -677,15 +717,30 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!tenders || tenders.length === 0) {
             const isFiltered = filterSite.value || filterKw.value.trim();
             tendersGrid.innerHTML = `
-                <div class="dash-empty-state" style="grid-column:1/-1">
+                <div class="dash-empty-state">
                     <span class="des-icon">${isFiltered ? '🔍' : '📭'}</span>
-                    <span class="des-title">${isFiltered ? 'No matches' : 'No tenders yet'}</span>
-                    <span class="des-sub">${isFiltered ? 'Try adjusting your site or keyword filters' : 'TAiQ and manual runs will populate this once they complete'}</span>
+                    <span class="des-title">${isFiltered ? 'No tenders found' : 'No tenders yet'}</span>
+                    <span class="des-sub">${isFiltered ? 'Try adjusting your filters or keywords' : 'TAiQ and manual runs will populate this once they complete'}</span>
                 </div>`;
             return;
         }
 
-        tendersGrid.innerHTML = tenders.map(t => _tenderCard(t)).join('');
+        tendersGrid.innerHTML = `
+            <div class="table-wrap">
+                <table class="tenders-table">
+                    <thead>
+                        <tr>
+                            <th>Keyword</th>
+                            <th>Site</th>
+                            <th>Tender Title</th>
+                            <th>Published On</th>
+                            <th>Status</th>
+                            <th style="text-align:right">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>${tenders.map(t => _tenderRow(t)).join('')}</tbody>
+                </table>
+            </div>`;
     }
 
     // ── Tender Inspection Modal ─────────────────────────────────────────────
@@ -718,7 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (pillsEl) {
             pillsEl.innerHTML = `
-                <span class="site-badge site-${tender.site}">${(tender.site || '').toUpperCase()}</span>
+                <span class="site-badge site-${tender.site}" title="${_escapeHtml(_siteLabel(tender))}">${_escapeHtml(_siteShortLabel(tender))}</span>
                 <span class="kw-tag">${_escapeHtml(tender.keyword || '')}</span>
                 <span class="td-mpill td-mpill-${rvStatus}">${rvIcon} ${rvStatus}</span>
                 ${tender.source === 'taiq' ? '<span class="taiq-source-tag">🤖 TAiQ Auto</span>' : ''}
@@ -741,6 +796,8 @@ document.addEventListener('DOMContentLoaded', () => {
             `;
         }
 
+        const rvSource = tender.source === 'taiq' ? 'taiq' : 'manual';
+
         let linksHtml = `<div class="td-actions-row">`;
         if (tender.url) {
             linksHtml += `<a href="${tender.url}" target="_blank" class="td-modal-btn primary-btn">View Source Page ↗</a>`;
@@ -749,7 +806,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const dlUrl = `/download/tender?path=${encodeURIComponent(tender.tender_dir)}&token=${encodeURIComponent(getToken())}`;
             linksHtml += `<a href="${dlUrl}" class="td-modal-btn secondary-btn" download>⬇ Download All Files</a>`;
         }
+        linksHtml += `<a href="/status?open=${rvSource}:${tender.id}" class="td-modal-btn secondary-btn">📝 Review</a>`;
         linksHtml += `</div>`;
+
+        const filesHtml = tender.tender_dir
+            ? `<div class="td-section-title">Documents</div>
+               <div class="card-files-list" id="td-modal-files"></div>`
+            : '';
 
         if (bodyEl) {
             bodyEl.innerHTML = `
@@ -758,8 +821,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span><strong>Published Date:</strong> ${tender.published_date || '—'}</span>
                 </div>
                 ${fieldsGridHtml}
+                ${filesHtml}
                 ${linksHtml}
             `;
+        }
+
+        if (tender.tender_dir) {
+            const filesEl = document.getElementById('td-modal-files');
+            if (filesEl) _renderTenderFiles(tender.tender_dir, filesEl);
         }
 
         if (tdModalOverlay) tdModalOverlay.style.display = 'flex';
@@ -767,96 +836,100 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Helpers ────────────────────────────────────────────────────────────
 
-    function _tenderCard(t) {
-        const fields = t.fields || {};
-        const fieldRows = Object.entries(fields).slice(0, 3).map(([k, v]) => {
-            const val = String(v).length > 55 ? String(v).substring(0,55) + '…' : String(v);
-            return `<div class="card-field"><strong>${k}</strong><span>${val}</span></div>`;
-        }).join('');
-
-        const taiqTag = t.source === 'taiq'
-            ? '<span class="taiq-source-tag">🤖 TAiQ Auto</span>' : '';
-
+    function _tenderRow(t) {
         const rvStatus = t.review_status || 'pending';
         const rvSource = t.source === 'taiq' ? 'taiq' : 'manual';
         const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
-        const rvChip   = `<span class="card-review-chip chip-${rvStatus}">${rvIcon} ${rvStatus}</span>`;
+        const taiqTag  = t.source === 'taiq'
+            ? '<span class="taiq-source-tag">🤖 TAiQ</span>' : '';
 
-        let actionsHtml = `<div class="card-actions">`;
-        actionsHtml += `<button class="card-inspect-btn" data-id="${t.id}">🔍 Inspect</button>`;
-        if (t.url) {
-            actionsHtml += `<a href="${t.url}" target="_blank" class="card-link">View ↗</a>`;
-        }
-        if (t.tender_dir) {
-            const dlUrl = `/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken())}`;
-            actionsHtml += `<a href="${dlUrl}" class="card-dl-btn" download>⬇ Download All</a>`;
-            actionsHtml += `<button class="card-files-btn" data-dir="${t.tender_dir}">📎 Files</button>`;
-        }
-        actionsHtml += `<a href="/status?open=${rvSource}:${t.id}" class="card-review-link">📝 Review</a>`;
-        actionsHtml += `</div>`;
+        const menuItems = [
+            `<button type="button" class="card-inspect-btn" data-id="${t.id}">🔍 Inspect</button>`,
+            t.url ? `<a href="${t.url}" target="_blank" rel="noopener">View source ↗</a>` : '',
+            t.tender_dir
+                ? `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken())}" download>⬇ Download all files</a>`
+                : '',
+            `<a href="/status?open=${rvSource}:${t.id}">📝 Review</a>`,
+        ].filter(Boolean).join('');
 
         return `
-            <div class="result-card">
-                <div class="card-meta">
-                    <span class="site-badge site-${t.site}">${t.site.toUpperCase()}</span>
-                    <span class="kw-tag">${t.keyword}</span>
+            <tr data-id="${t.id}">
+                <td class="tt-kw">${_escapeHtml(t.keyword || '—')}</td>
+                <td><span class="site-badge site-${t.site}" title="${_escapeHtml(_siteLabel(t))}">${_escapeHtml(_siteShortLabel(t))}</span></td>
+                <td>
+                    <span class="tt-title" title="${_escapeHtml(t.title || '')}">${_escapeHtml(t.title || 'Unknown Opportunity')}</span>
                     ${taiqTag}
-                    ${rvChip}
-                </div>
-                <h4 style="cursor:pointer" onclick="openTenderDetailModal('${t.id}')">${t.title || 'Unknown Opportunity'}</h4>
-                <div class="card-fields">${fieldRows}</div>
-                ${actionsHtml}
-            </div>
-        `;
+                </td>
+                <td class="tt-date">${_escapeHtml(t.published_date || '—')}</td>
+                <td><span class="tt-status tt-status-${rvStatus}">${rvIcon} ${rvStatus}</span></td>
+                <td style="text-align:right">
+                    <span class="row-menu-wrap">
+                        <button type="button" class="row-menu-btn" aria-haspopup="true" aria-label="Row actions">⋮</button>
+                        <span class="row-menu">${menuItems}</span>
+                    </span>
+                </td>
+            </tr>`;
     }
 
-    async function _toggleCardFiles(btn) {
-        const card = btn.closest('.result-card');
-        let list = card.querySelector('.card-files-list');
-        if (list) {
-            const hidden = list.style.display === 'none';
-            list.style.display = hidden ? '' : 'none';
-            btn.textContent = hidden ? '📎 Hide files' : '📎 Files';
-            return;
-        }
-        btn.textContent = 'Loading…';
-        btn.disabled = true;
+    // The row has no space for a file list, so the documents live in the
+    // detail modal and are fetched the first time it opens.
+    async function _renderTenderFiles(dir, container) {
+        container.innerHTML = '<span class="empty-msg">Loading files…</span>';
         try {
             const token = getToken() || '';
-            const dir = btn.dataset.dir;
-            const res = await fetch(`/tender/files?dir=${encodeURIComponent(dir)}&token=${encodeURIComponent(token)}`);
+            const res = await fetch(
+                `/tender/files?dir=${encodeURIComponent(dir)}&token=${encodeURIComponent(token)}`
+            );
             const files = await res.json();
             if (!Array.isArray(files) || files.length === 0) {
-                btn.textContent = '📎 No files';
+                container.innerHTML = '<span class="empty-msg">No files saved for this tender.</span>';
                 return;
             }
-            const token2 = getToken() || '';
-            list = document.createElement('div');
-            list.className = 'card-files-list';
-            list.innerHTML = files.map(f => {
-                const url = `/download/file?path=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token2)}`;
+            container.innerHTML = files.map(f => {
+                const url = `/download/file?path=${encodeURIComponent(f.path)}&token=${encodeURIComponent(token)}`;
                 return `<div class="card-file-item">
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                    <a href="${url}" download title="${f.name}">${f.name}</a>
+                    <a href="${url}" download title="${_escapeHtml(f.name)}">${_escapeHtml(f.name)}</a>
                 </div>`;
             }).join('');
-            card.appendChild(list);
-            btn.textContent = '📎 Hide files';
         } catch (_) {
-            btn.textContent = '📎 Error';
-        } finally {
-            btn.disabled = false;
+            container.innerHTML = '<span class="empty-msg">Could not load files.</span>';
         }
+    }
+
+    function _closeRowMenus(except) {
+        document.querySelectorAll('.row-menu.open').forEach(m => {
+            if (m !== except) m.classList.remove('open');
+        });
     }
 
     tendersGrid.addEventListener('click', e => {
+        const menuBtn = e.target.closest('.row-menu-btn');
+        if (menuBtn) {
+            e.stopPropagation();
+            const menu = menuBtn.parentElement.querySelector('.row-menu');
+            _closeRowMenus(menu);
+            menu.classList.toggle('open');
+            return;
+        }
+
         const inspectBtn = e.target.closest('.card-inspect-btn');
         if (inspectBtn) {
+            _closeRowMenus();
             openTenderDetailModal(inspectBtn.dataset.id);
             return;
         }
-        const btn = e.target.closest('.card-files-btn');
-        if (btn) _toggleCardFiles(btn);
+
+        // Links inside the menu act normally; anywhere else on the row opens
+        // the detail modal.
+        if (e.target.closest('.row-menu')) return;
+        const row = e.target.closest('tr[data-id]');
+        if (row) openTenderDetailModal(row.dataset.id);
+    });
+
+    document.addEventListener('click', () => _closeRowMenus());
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape') _closeRowMenus();
     });
 
     // Was called in six places but never defined, so every call threw a

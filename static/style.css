@@ -147,14 +147,6 @@ input:focus, textarea:focus, select:focus {
 /* =============================================
    NAVIGATION
    ============================================= */
-.top-nav {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1.5rem 3rem;
-    background: transparent;
-}
-
 .logo {
     font-size: 1.75rem;
     font-weight: 800;
@@ -4196,5 +4188,387 @@ a { text-decoration: none; }
     font-weight: 600;
     text-decoration: none;
     cursor: pointer;
+}
+
+/* =============================================
+   APP SHELL v2 — fixed sidebar + full-width content
+   Loaded last so it wins over the older layout rules.
+   ============================================= */
+:root {
+    --sidebar-w: 236px;
+    --topbar-h: 72px;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────── */
+.app-sidebar {
+    position: fixed;
+    top: var(--topbar-h);
+    left: 0;
+    bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 1.1rem 0.85rem;
+    overflow-y: auto;
+    z-index: 400;
+}
+
+.side-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.side-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.7rem 0.85rem;
+    border-radius: var(--radius-lg);
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-decoration: none;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.side-link:hover {
+    background: var(--primary-light);
+    color: var(--text-main);
+}
+
+.side-link.active {
+    background: var(--accent-light);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.side-link-icon {
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+}
+
+/* ── Content offset ───────────────────────────────────────────────────────── */
+body.has-sidebar .main-layout {
+    max-width: none;
+    width: auto;
+    margin: 0 0 0 var(--sidebar-w);
+    padding: 0 2.25rem 4rem;
+}
+
+.top-nav {
+    min-height: var(--topbar-h);
+    gap: 1rem;
+}
+
+/* ── Top bar: portal button, avatar, menu ─────────────────────────────────── */
+.portal-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.45rem 0.9rem;
+    border: 1.5px solid var(--accent);
+    border-radius: var(--radius-lg);
+    color: var(--accent);
+    background: var(--surface);
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s ease;
+}
+.portal-btn:hover { background: var(--accent-light); }
+.portal-btn svg   { width: 15px; height: 15px; }
+
+.nav-avatar-wrap { position: relative; }
+
+.nav-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    border: none;
+    background: var(--accent);
+    color: #fff;
+    font-family: inherit;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    transition: filter 0.15s ease;
+}
+.nav-avatar:hover { filter: brightness(1.1); }
+
+.nav-avatar-menu {
+    position: absolute;
+    top: calc(100% + 0.55rem);
+    right: 0;
+    min-width: 200px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: 0.4rem;
+    display: none;
+    z-index: 600;
+}
+.nav-avatar-menu.open { display: block; }
+
+.nam-head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.6rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.35rem;
+}
+.nam-head strong { font-size: 0.9rem; }
+.nam-head span   { font-size: 0.75rem; color: var(--text-muted); }
+
+.nam-item {
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: var(--danger);
+    padding: 0.55rem 0.7rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+.nam-item:hover { background: #fef2f2; }
+
+/* ── Mobile sidebar toggle ────────────────────────────────────────────────── */
+.sidebar-toggle {
+    display: none;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.4rem;
+    cursor: pointer;
+    color: var(--text-main);
+}
+.sidebar-toggle svg { width: 20px; height: 20px; display: block; }
+
+@media (max-width: 1000px) {
+    .sidebar-toggle { display: block; }
+    .app-sidebar {
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+        box-shadow: var(--shadow-lg);
+    }
+    .app-sidebar.open { transform: translateX(0); }
+    body.has-sidebar .main-layout {
+        margin-left: 0;
+        padding: 0 1.1rem 3rem;
+    }
+    .top-nav { padding: 0.85rem 1.1rem; }
+}
+
+/* ── Page title bar ───────────────────────────────────────────────────────── */
+.page-date-chip {
+    display: inline-block;
+    padding: 0.4rem 0.85rem;
+    border: 1px solid var(--border);
+    border-radius: 9999px;
+    background: var(--surface);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* ── Stat cards: circular tinted icon badge ───────────────────────────────── */
+.stats-row {
+    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.stat-card-v2 {
+    padding: 1.15rem 1.25rem 1.15rem;
+    gap: 0.3rem;
+}
+/* The mockup's cards are icon + number + label only. */
+.stat-card-v2::after { display: none; }
+.stat-card-v2 .sc2-bar-track { display: none; }
+.sc2-label { text-transform: none; letter-spacing: 0; font-size: 0.82rem; }
+
+.sc2-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-size: 1.3rem;
+    line-height: 1;
+    margin-bottom: 0.5rem;
+    background: var(--primary-light);
+    color: var(--text-main);
+}
+.scard-total  .sc2-icon { background: #eef2ff; }
+.scard-ungm   .sc2-icon { background: #fef3c7; }
+.scard-devnet .sc2-icon { background: #dbeafe; }
+.scard-ngobox .sc2-icon { background: #d1fae5; }
+.scard-taiq   .sc2-icon { background: #dcfce7; }
+.scard-runs   .sc2-icon { background: #f1f5f9; }
+.scard-lastupdate .sc2-icon { background: #fef3c7; }
+.scard-generic .sc2-icon {
+    background: color-mix(in srgb, var(--scard-accent, #64748b) 16%, #ffffff);
+}
+
+.sc2-sub {
+    font-size: 0.72rem;
+    color: var(--text-light);
+    font-weight: 500;
+}
+
+/* ── Daily report card: mockup information rows ───────────────────────────── */
+.drc-line {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    color: var(--text-muted);
+}
+.drc-line b { color: var(--text-main); font-weight: 700; }
+
+.drc-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin-top: 0.15rem;
+}
+.drc-bar-label {
+    font-size: 0.72rem;
+    color: var(--text-light);
+}
+.drc-bar-fill-dl { background: var(--accent); }
+
+/* ── Tenders table ────────────────────────────────────────────────────────── */
+.tenders-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.tenders-table th {
+    text-align: left;
+    padding: 0.7rem 1rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    background: var(--bg-color);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+}
+.tenders-table td {
+    padding: 0.8rem 1rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+.tenders-table tbody tr { cursor: pointer; transition: background 0.12s ease; }
+.tenders-table tbody tr:hover { background: var(--bg-color); }
+.tenders-table tbody tr:last-child td { border-bottom: none; }
+
+.tt-title {
+    font-weight: 600;
+    color: var(--text-main);
+    display: block;
+    max-width: 460px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.tt-kw { color: var(--text-muted); white-space: nowrap; }
+.tt-date { color: var(--text-muted); white-space: nowrap; }
+
+.tt-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.74rem;
+    font-weight: 700;
+    padding: 0.2rem 0.6rem;
+    border-radius: 9999px;
+    white-space: nowrap;
+}
+.tt-status-approved { background: #dcfce7; color: #166534; }
+.tt-status-rejected { background: #fee2e2; color: #991b1b; }
+.tt-status-pending  { background: #fef3c7; color: #b45309; }
+
+/* ── Row action (kebab) menu ──────────────────────────────────────────────── */
+.row-menu-wrap { position: relative; display: inline-block; }
+
+.row-menu-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 1.15rem;
+    line-height: 1;
+    padding: 0.2rem 0.45rem;
+    border-radius: var(--radius-md);
+}
+.row-menu-btn:hover { background: var(--primary-light); color: var(--text-main); }
+
+.row-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.3rem);
+    min-width: 178px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    padding: 0.3rem;
+    display: none;
+    z-index: 550;
+}
+.row-menu.open { display: block; }
+
+.row-menu a, .row-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    font-family: inherit;
+    font-size: 0.84rem;
+    color: var(--text-main);
+    text-decoration: none;
+    padding: 0.5rem 0.65rem;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    white-space: nowrap;
+}
+.row-menu a:hover, .row-menu button:hover { background: var(--primary-light); }
+
+/* ── Filter row: search field with icon ───────────────────────────────────── */
+.filter-search {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+.filter-search .filter-input { padding-right: 2rem; }
+.filter-search svg {
+    position: absolute;
+    right: 0.6rem;
+    width: 15px;
+    height: 15px;
+    color: var(--text-light);
+    pointer-events: none;
+}
+.filter-btn svg { width: 14px; height: 14px; margin-right: 0.35rem; }
+
+/* A wrapped badge makes the whole table row taller — keep them on one line. */
+.site-badge { white-space: nowrap; }
+
+/* Full-width fixed bars must clear the sidebar rather than run beneath it. */
+body.has-sidebar .logs-bar { left: var(--sidebar-w); }
+
+@media (max-width: 1000px) {
+    body.has-sidebar .logs-bar { left: 0; }
 }
 

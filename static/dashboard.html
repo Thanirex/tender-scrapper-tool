@@ -26,7 +26,10 @@
         <div class="page-title-bar">
             <div>
                 <h1 class="page-h1">Dashboard</h1>
-                <p class="page-sub" id="selected-date-label">Today's overview</p>
+                <p class="page-sub">Monitor your tender processing and system activity</p>
+            </div>
+            <div>
+                <span class="page-date-chip" id="selected-date-label">Today's overview</span>
             </div>
         </div>
 
@@ -109,12 +112,24 @@
                             <select id="filter-site" class="filter-select">
                                 <option value="">All Sites</option>
                             </select>
-                            <input type="text" id="filter-keyword" class="filter-input"
-                                   placeholder="Filter keyword…">
-                            <button class="secondary-btn filter-btn" id="apply-filter">Filter</button>
+                            <span class="filter-search">
+                                <input type="text" id="filter-keyword" class="filter-input"
+                                       placeholder="Search keywords…">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>
+                                </svg>
+                            </span>
+                            <button class="secondary-btn filter-btn" id="apply-filter">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                     stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                                     aria-hidden="true">
+                                    <path d="M3 5h18l-7 8v6l-4 2v-8Z"/>
+                                </svg>Filter
+                            </button>
                         </div>
                     </div>
-                    <div class="dash-results-grid" id="tenders-grid">
+                    <div id="tenders-grid">
                         <p class="empty-msg">No tenders found for this date.</p>
                     </div>
                 </div>
