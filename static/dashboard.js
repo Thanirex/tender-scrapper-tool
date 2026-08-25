@@ -418,214 +418,11 @@ document.addEventListener('DOMContentLoaded', () => {
     async function loadDayRange(startDate, endDate) {
         dateLabel.textContent = `Overview for ${_pretty(startDate)} – ${_pretty(endDate)}`;
         await loadStats(null, startDate, endDate);
-        await loadTaiqReport(null, startDate, endDate);
         filterSite.value = '';
         filterKw.value   = '';
         await loadTenders();
     }
 
-    // ── TAiQ Sophisticated Scrape & Funnel Report Card ─────────────────────
-    let trcSitesCache = [];
-
-    const toggleBtn = document.getElementById('trc-toggle-details');
-    const detailsCollapse = document.getElementById('trc-details-collapse');
-    const siteSearchInput = document.getElementById('trc-site-search');
-
-    if (toggleBtn && detailsCollapse) {
-        toggleBtn.addEventListener('click', () => {
-            const isHidden = detailsCollapse.style.display === 'none';
-            detailsCollapse.style.display = isHidden ? 'block' : 'none';
-            toggleBtn.textContent = isHidden ? 'Hide Details ▴' : 'Show Details ▾';
-        });
-    }
-
-    if (siteSearchInput) {
-        siteSearchInput.addEventListener('input', (e) => {
-            const query = e.target.value.toLowerCase().trim();
-            renderTrcSiteRows(trcSitesCache.filter(s => s.site.toLowerCase().includes(query)));
-        });
-    }
-
-    async function loadTaiqReport(dateStr, startDate = null, endDate = null) {
-        const dateLbl = document.getElementById('trc-date-label');
-        const statusBadge = document.getElementById('trc-status-badge');
-        const tilesContainer = document.getElementById('trc-stat-tiles');
-        const funnelBar = document.getElementById('trc-funnel-bar');
-        const funnelLegend = document.getElementById('trc-funnel-legend');
-        const funnelTotalLbl = document.getElementById('trc-funnel-total-lbl');
-        const kwList = document.getElementById('trc-keyword-list');
-
-        if (dateLbl) {
-            dateLbl.textContent = (startDate && endDate)
-                ? `${_pretty(startDate)} – ${_pretty(endDate)}`
-                : _pretty(dateStr);
-        }
-
-        const url = (startDate && endDate)
-            ? `/dashboard/taiq-report?start_date=${startDate}&end_date=${endDate}`
-            : `/dashboard/taiq-report?date=${dateStr}`;
-
-        const res = await authFetch(url);
-        if (!res) return;
-        const data = await res.json();
-        const run = data.run;
-        const totals = data.totals || {};
-        const sites = data.sites || [];
-        const topKw = data.top_keywords || [];
-        const trend = data.trend || {};
-        trcSitesCache = sites;
-
-        if (!run) {
-            if (statusBadge) { statusBadge.className = 'trc-badge trc-badge-idle'; statusBadge.textContent = 'No Run Recorded'; }
-            if (tilesContainer) tilesContainer.innerHTML = '<p class="empty-msg" style="grid-column: 1/-1;">No extraction run recorded for this date.</p>';
-            if (funnelBar) funnelBar.innerHTML = '';
-            if (funnelLegend) funnelLegend.innerHTML = '';
-            return;
-        }
-
-        // Status badge
-        if (statusBadge) {
-            const st = run.status || 'complete';
-            const map = {
-                running:  ['Running Now', 'trc-badge-running'],
-                complete: ['Completed',   'trc-badge-complete'],
-                failed:   ['Failed',      'trc-badge-failed'],
-                stopped:  ['Stopped',     'trc-badge-stopped']
-            };
-            const [lbl, cls] = map[st] || [st, 'trc-badge-idle'];
-            statusBadge.className = `trc-badge ${cls}`;
-            statusBadge.textContent = lbl;
-        }
-
-        // Stat tiles
-        const listed = totals.listed || 0;
-        const saved = totals.saved || run.total_tenders || 0;
-        const rejectedTotal = totals.rejected_total || 0;
-        const sitesScanned = totals.sites_scanned || sites.length || 0;
-
-        const trendPct = trend.pct_change || 0;
-        const trendSymbol = trendPct >= 0 ? '▲' : '▼';
-        const trendClass = trendPct >= 0 ? 'trc-trend-up' : 'trc-trend-down';
-        const trendHtml = trend.avg_7d ? `<span class="trc-trend ${trendClass}">${trendSymbol} ${Math.abs(trendPct)}% vs 7d avg</span>` : '';
-
-        if (tilesContainer) {
-            tilesContainer.innerHTML = `
-                <div class="trc-tile">
-                    <span class="trc-tile-icon">🌐</span>
-                    <div class="trc-tile-body">
-                        <span class="trc-tile-val">${sitesScanned}</span>
-                        <span class="trc-tile-lbl">Sites Scanned</span>
-                    </div>
-                </div>
-                <div class="trc-tile">
-                    <span class="trc-tile-icon">🔍</span>
-                    <div class="trc-tile-body">
-                        <span class="trc-tile-val">${listed.toLocaleString()}</span>
-                        <span class="trc-tile-lbl">Looked At</span>
-                    </div>
-                </div>
-                <div class="trc-tile trc-tile-saved">
-                    <span class="trc-tile-icon">✅</span>
-                    <div class="trc-tile-body">
-                        <span class="trc-tile-val">${saved.toLocaleString()} ${trendHtml}</span>
-                        <span class="trc-tile-lbl">Tenders Saved</span>
-                    </div>
-                </div>
-                <div class="trc-tile">
-                    <span class="trc-tile-icon">🚫</span>
-                    <div class="trc-tile-body">
-                        <span class="trc-tile-val">${rejectedTotal.toLocaleString()}</span>
-                        <span class="trc-tile-lbl">Filtered Out</span>
-                    </div>
-                </div>
-            `;
-        }
-
-        // Rejection Funnel Bar & Legend
-        const rej = totals.rejected || {};
-        const reasonLabels = {
-            title_miss: { label: "Keyword Not in Title", color: "#64748b" },
-            negative:   { label: "Negative Keywords",    color: "#ef4444" },
-            stale:      { label: "Older than Cutoff",    color: "#f59e0b" },
-            no_date:    { label: "No Date Found",        color: "#64748b" },
-            closed:     { label: "Archived / Expired",   color: "#a855f7" },
-            duplicate:  { label: "Already Collected",    color: "#3b82f6" },
-            error:      { label: "Scrape Error",         color: "#dc2626" },
-        };
-
-        if (funnelTotalLbl) funnelTotalLbl.textContent = `${rejectedTotal.toLocaleString()} total filtered out`;
-
-        let barSegmentsHtml = '';
-        let legendItemsHtml = '';
-
-        if (rejectedTotal > 0) {
-            for (const [rk, meta] of Object.entries(reasonLabels)) {
-                const count = rej[rk] || 0;
-                if (count > 0) {
-                    const widthPct = Math.max(1, (count / rejectedTotal * 100).toFixed(1));
-                    barSegmentsHtml += `<div class="trc-funnel-seg" style="width: ${widthPct}%; background-color: ${meta.color};" title="${meta.label}: ${count.toLocaleString()} (${widthPct}%)"></div>`;
-                    legendItemsHtml += `
-                        <div class="trc-legend-item">
-                            <span class="trc-legend-dot" style="background-color: ${meta.color}"></span>
-                            <span class="trc-legend-text">${meta.label}: <strong>${count.toLocaleString()}</strong></span>
-                        </div>
-                    `;
-                }
-            }
-        } else {
-            barSegmentsHtml = `<div class="trc-funnel-seg" style="width: 100%; background-color: #22c55e;" title="0 Filtered"></div>`;
-            legendItemsHtml = `<div class="trc-legend-item"><span class="trc-legend-dot" style="background-color: #22c55e"></span><span>100% Retained / Clean Run</span></div>`;
-        }
-
-        if (funnelBar) funnelBar.innerHTML = barSegmentsHtml;
-        if (funnelLegend) funnelLegend.innerHTML = legendItemsHtml;
-
-        renderTrcSiteRows(sites);
-
-        if (kwList) {
-            if (topKw.length > 0) {
-                kwList.innerHTML = topKw.map(k => `
-                    <div class="trc-kw-item">
-                        <span class="trc-kw-name">${_escapeHtml(k.keyword)}</span>
-                        <span class="trc-kw-count">${k.count} tender${k.count !== 1 ? 's' : ''}</span>
-                    </div>
-                `).join('');
-            } else {
-                kwList.innerHTML = '<p class="empty-msg">No keyword matches recorded for this run.</p>';
-            }
-        }
-    }
-
-    function renderTrcSiteRows(sites) {
-        const siteRowsContainer = document.getElementById('trc-site-rows');
-        if (!siteRowsContainer) return;
-
-        if (!sites || sites.length === 0) {
-            siteRowsContainer.innerHTML = '<tr><td colspan="6" class="empty-msg">No website stats recorded.</td></tr>';
-            return;
-        }
-
-        const badgeMap = {
-            healthy:   ['Healthy',   'trc-sbadge-healthy'],
-            low_yield: ['Low Yield', 'trc-sbadge-low'],
-            warning:   ['Warning',   'trc-sbadge-warn'],
-            idle:      ['Idle',      'trc-sbadge-idle']
-        };
-
-        siteRowsContainer.innerHTML = sites.map(s => {
-            const [statusLbl, statusCls] = badgeMap[s.status] || [s.status, 'trc-sbadge-idle'];
-            return `
-                <tr>
-                    <td><strong>${_escapeHtml(s.site)}</strong></td>
-                    <td>${s.listed.toLocaleString()}</td>
-                    <td><strong style="color: ${s.saved > 0 ? '#22c55e' : 'inherit'}">${s.saved.toLocaleString()}</strong></td>
-                    <td>${s.rejected.toLocaleString()}</td>
-                    <td>${s.yield_pct}%</td>
-                    <td><span class="trc-sbadge ${statusCls}">${statusLbl}</span></td>
-                </tr>
-            `;
-        }).join('');
-    }
 
     // ── Data loading ───────────────────────────────────────────────────────
 
@@ -634,19 +431,39 @@ document.addEventListener('DOMContentLoaded', () => {
         dateLabel.textContent = isToday ? "Today's overview" : `Overview for ${_pretty(dateStr)}`;
         // Stats must finish first — it populates the site dropdown before tenders load
         await loadStats(dateStr);
-        await loadTaiqReport(dateStr);
         // Reset filters whenever the date changes so the dropdown is clean
         filterSite.value = '';
         filterKw.value   = '';
         await loadTenders();
     }
 
+    // Only these four carry bespoke branding. Every other site is described by
+    // its `display_name` in sites_config.json, which the server sends with each
+    // row — so a newly added site shows up correctly with no change here.
     const _SITE_CFG = {
         ungm:   { icon: '🌐', label: 'UNGM',   cls: 'scard-ungm'   },
         devnet: { icon: '💼', label: 'DevNet', cls: 'scard-devnet' },
         ngobox: { icon: '📦', label: 'NGOBox', cls: 'scard-ngobox' },
         taiq:   { icon: '🤖', label: 'TAiQ',   cls: 'scard-taiq'   },
     };
+
+    // Stable per-site accent colour so every site gets a distinct, consistent
+    // hue without anyone having to maintain a colour table.
+    const _SITE_COLORS = { ungm: '#f59e0b', devnet: '#3b82f6', ngobox: '#10b981', taiq: '#7c3aed' };
+
+    function _siteColor(key) {
+        if (_SITE_COLORS[key]) return _SITE_COLORS[key];
+        let h = 0;
+        for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 360;
+        return `hsl(${h}, 62%, 48%)`;
+    }
+
+    // `row` is a by_site entry from /dashboard/stats; display_name comes from
+    // the team's sites_config.json.
+    function _siteLabel(row) {
+        const key = String(row.site || '').toLowerCase();
+        return _SITE_CFG[key]?.label || row.display_name || key.toUpperCase();
+    }
 
     async function loadStats(dateStr, startDate = null, endDate = null) {
         statsRow.innerHTML = '';
@@ -690,13 +507,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 </div>`;
 
             const siteCards = siteTotals.map(s => {
-                const cfg = _SITE_CFG[s.site] || { icon: '📌', label: s.site.toUpperCase(), cls: '' };
+                const key = String(s.site || '').toLowerCase();
+                const cfg = _SITE_CFG[key];
+                const label = _siteLabel(s);
+                const icon = cfg?.icon || '📌';
                 const pct = grandTotal > 0 ? Math.max(Math.round((s.count / grandTotal) * 100), 5) : 5;
+                // Sites without a bespoke class get their accent inline, so they
+                // never render as an unstyled card.
+                const accent = cfg ? '' : ` style="--scard-accent:${_siteColor(key)}"`;
                 return `
-                    <div class="stat-card-v2 ${cfg.cls}">
-                        <div class="sc2-icon">${cfg.icon}</div>
+                    <div class="stat-card-v2 ${cfg?.cls || 'scard-generic'}"${accent}>
+                        <div class="sc2-icon">${icon}</div>
                         <span class="sc2-num">${s.count}</span>
-                        <span class="sc2-label">${cfg.label}</span>
+                        <span class="sc2-label" title="${_escapeHtml(label)}">${_escapeHtml(label)}</span>
                         <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:${pct}%"></div></div>
                     </div>`;
             }).join('');
@@ -713,10 +536,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const currentVal = filterSite.value;
             isUpdatingDropdown = true;
+            const labelByKey = Object.fromEntries(
+                siteTotals.map(s => [String(s.site || '').toLowerCase(), _siteLabel(s)])
+            );
             filterSite.innerHTML = '<option value="">All Sites</option>' +
                 [...allSites].map(s => {
-                    const lbl = _SITE_CFG[s]?.label || s.toUpperCase();
-                    return `<option value="${s}">${lbl}</option>`;
+                    const lbl = labelByKey[s] || s.toUpperCase();
+                    return `<option value="${s}">${_escapeHtml(lbl)}</option>`;
                 }).join('');
             filterSite.value = currentVal || '';
             isUpdatingDropdown = false;
@@ -803,8 +629,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!panel) return;
         const sites = data.by_site || [];
         const total = sites.reduce((s, x) => s + x.count, 0);
-        const colors = { ungm:'#f59e0b', devnet:'#3b82f6', ngobox:'#10b981', taiq:'#7c3aed' };
-        const labels = { ungm:'UNGM', devnet:'DevNet', ngobox:'NGOBox', taiq:'TAiQ' };
         if (!sites.length || total === 0) {
             panel.innerHTML = `
                 <div class="sbd-title">Today at a glance</div>
@@ -813,11 +637,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const rows = sites.map(s => {
             const pct   = Math.max(Math.round((s.count / total) * 100), 4);
-            const color = colors[s.site] || '#64748b';
-            const label = labels[s.site] || s.site.toUpperCase();
+            const color = _siteColor(String(s.site || '').toLowerCase());
+            const label = _siteLabel(s);
             return `
                 <div class="sbd-row">
-                    <span class="sbd-site-label">${label}</span>
+                    <span class="sbd-site-label" title="${_escapeHtml(label)}">${_escapeHtml(label)}</span>
                     <div class="sbd-bar-track">
                         <div class="sbd-bar-fill" style="width:${pct}%;background:${color}"></div>
                     </div>
@@ -1034,6 +858,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const btn = e.target.closest('.card-files-btn');
         if (btn) _toggleCardFiles(btn);
     });
+
+    // Was called in six places but never defined, so every call threw a
+    // ReferenceError — which aborted the tender detail modal's render.
+    function _escapeHtml(str) {
+        return String(str ?? '').replace(/[&<>"']/g, ch => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[ch]);
+    }
 
     function _fmtDate(d) {
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;

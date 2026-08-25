@@ -669,7 +669,9 @@ class TenderDB:
 
         total_taiq = 0
         for cr in cron_rows:
-            if cr["status"] in ("complete", "failed", "stopped"):
+            # "running" is included so the dashboard doesn't blank out the TAiQ
+            # card and its counts while the daily run is still in progress.
+            if cr["status"] in ("complete", "failed", "stopped", "running"):
                 t_count = cr["total_tenders"] or 0
                 total_taiq += t_count
                 sessions.append({
@@ -683,14 +685,16 @@ class TenderDB:
                     "tenders_found": t_count,
                     "source":        "taiq",
                 })
+                # Every site the run actually scanned is listed, including the
+                # ones that saved nothing — otherwise the dashboard only ever
+                # shows the handful of sites that happened to yield a tender.
                 if s_json := cr.get("stats_json"):
                     try:
                         s_data = json.loads(s_json)
                         for sn, sd in s_data.get("sites", {}).items():
                             sn_l = sn.lower()
-                            saved_cnt = sd.get("saved", 0)
-                            if saved_cnt > 0 and sn_l not in site_map:
-                                site_map[sn_l] = saved_cnt
+                            if sn_l not in site_map:
+                                site_map[sn_l] = sd.get("saved", 0)
                     except Exception:
                         pass
 
@@ -759,7 +763,9 @@ class TenderDB:
 
         total_taiq = 0
         for cr in cron_rows:
-            if cr["status"] in ("complete", "failed", "stopped"):
+            # "running" is included so the dashboard doesn't blank out the TAiQ
+            # card and its counts while the daily run is still in progress.
+            if cr["status"] in ("complete", "failed", "stopped", "running"):
                 t_count = cr["total_tenders"] or 0
                 total_taiq += t_count
                 sessions.append({
@@ -773,14 +779,16 @@ class TenderDB:
                     "tenders_found": t_count,
                     "source":        "taiq",
                 })
+                # Every site the run actually scanned is listed, including the
+                # ones that saved nothing — otherwise the dashboard only ever
+                # shows the handful of sites that happened to yield a tender.
                 if s_json := cr.get("stats_json"):
                     try:
                         s_data = json.loads(s_json)
                         for sn, sd in s_data.get("sites", {}).items():
                             sn_l = sn.lower()
-                            saved_cnt = sd.get("saved", 0)
-                            if saved_cnt > 0 and sn_l not in site_map:
-                                site_map[sn_l] = saved_cnt
+                            if sn_l not in site_map:
+                                site_map[sn_l] = sd.get("saved", 0)
                     except Exception:
                         pass
 

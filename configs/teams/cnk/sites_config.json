@@ -1,6 +1,7 @@
 {
     "devnet": {
         "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
+        "display_name": "DevNet Jobs India (RFPs)",
         "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
         "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
         "results_link_selector": "a[id*='lnkJobTitle']",
@@ -16,10 +17,12 @@
     "nasscom": {
         "url": "https://www.nasscomfoundation.org/requestproposal",
         "scraper_type": "nasscom",
+        "display_name": "NASSCOM Foundation (RFPs)",
         "skip_date_filter": true
     },
     "afdb": {
         "search_url_template": "https://www.afdb.org/en/projects-and-operations/procurement?title={keyword}",
+        "display_name": "African Development Bank Procurement",
         "results_link_selector": ".views-field-title a",
         "tender_title_selector": "h1.page-header",
         "tender_description_selector": ".field-name-body",
@@ -29,6 +32,7 @@
     },
     "jobinrwanda": {
         "url": "https://www.jobinrwanda.com/jobs/tender",
+        "display_name": "Job in Rwanda (Tenders)",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
         "results_link_selector": "a[href*='/job/']",
@@ -38,6 +42,7 @@
     },
     "jobintanzania": {
         "url": "https://www.jobintanzania.com/jobs/all",
+        "display_name": "Job in Tanzania",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
         "results_link_selector": "a[href*='/job/']",
@@ -47,6 +52,7 @@
     },
     "jobinuganda": {
         "url": "https://www.jobinuganda.com/jobs/all",
+        "display_name": "Job in Uganda",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
         "results_link_selector": "a[href*='/job/']",
@@ -56,6 +62,7 @@
     },
     "jobinkenya": {
         "url": "https://www.jobinkenya.com/jobs/all",
+        "display_name": "Job in Kenya",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
         "results_link_selector": "a[href*='/job/']",

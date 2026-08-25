@@ -23,7 +23,10 @@
       "Bash(.venv/Scripts/python.exe -c ' *)",
       "Bash(\".venv/Scripts/python.exe\" -m py_compile api.py cron_runner.py agents/mercycorps_scraper_agent.py)",
       "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" test_stats.py)",
-      "Bash(grep -i \"solar\\\\|isa.int\\\\|| isa\\\\|\\\\`isa\\\\`\")"
+      "Bash(grep -i \"solar\\\\|isa.int\\\\|| isa\\\\|\\\\`isa\\\\`\")",
+      "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" inspect_stats.py)",
+      "Bash('c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe' -c ' *)",
+      "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" sim_run.py)"
     ]
   }
 }

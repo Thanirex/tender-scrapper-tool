@@ -2,6 +2,7 @@
 {
     "devnet": {
         "url": "https://devnetjobsindia.org/rfp_assignments.aspx",
+        "display_name": "DevNet Jobs India (RFPs)",
         "search_input_selector": "input#ContentPlaceHolder1_txtKeywords",
         "search_button_selector": "input#ContentPlaceHolder1_imgSearchJob",
         "results_link_selector": "a[id*='lnkJobTitle']",
@@ -17,6 +18,7 @@
     "nasscom": {
         "url": "https://www.nasscomfoundation.org/requestproposal",
         "scraper_type": "nasscom",
+        "display_name": "NASSCOM Foundation (RFPs)",
         "skip_date_filter": true
     },
     "ngobox": {
