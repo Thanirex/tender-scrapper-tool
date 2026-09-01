@@ -26,7 +26,9 @@
       "Bash(grep -i \"solar\\\\|isa.int\\\\|| isa\\\\|\\\\`isa\\\\`\")",
       "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" inspect_stats.py)",
       "Bash('c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe' -c ' *)",
-      "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" sim_run.py)"
+      "Bash(\"c:/Users/Thaneesh/Documents/GitHub/Tender Scrapper tool old/.venv/Scripts/python.exe\" sim_run.py)",
+      "Bash(python -m py_compile db.py routers/dashboard_router.py)",
+      "Bash(node --check static/dashboard.js)"
     ]
   }
 }

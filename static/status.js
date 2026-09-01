@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let searchTimer  = null;
     let sortKey      = 'found_at';
     let sortDir      = -1;                      // -1 desc, 1 asc
+    let trendRange   = 6;                       // months shown in the trend chart
 
     // ── Elements ───────────────────────────────────────────────────────────
     const monthLabel  = document.getElementById('rv-month-label');
@@ -49,6 +50,14 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Wiring ─────────────────────────────────────────────────────────────
     document.getElementById('rv-month-prev').addEventListener('click', () => _shiftMonth(-1));
     document.getElementById('rv-month-next').addEventListener('click', () => _shiftMonth(1));
+
+    const trendRangeSel = document.getElementById('rv-trend-range');
+    if (trendRangeSel) {
+        trendRangeSel.addEventListener('change', () => {
+            trendRange = parseInt(trendRangeSel.value, 10) || 6;
+            loadSummary();
+        });
+    }
 
     tiles.forEach(tile => tile.addEventListener('click', () => {
         statusFilter = tile.dataset.status;
@@ -105,7 +114,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Summary + trend ────────────────────────────────────────────────────
     async function loadSummary() {
         try {
-            const res  = await authFetch(`/review/summary?month=${month}`);
+            const res  = await authFetch(`/review/summary?month=${month}&months=${trendRange}`);
             if (!res) return;
             const data = await res.json();
             monthLabel.textContent = _prettyMonth(month);
@@ -113,9 +122,99 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('rv-num-approved').textContent = data.approved ?? 0;
             document.getElementById('rv-num-rejected').textContent = data.rejected ?? 0;
             document.getElementById('rv-num-pending').textContent  = data.pending  ?? 0;
+            _renderTileIcons();
+            _renderTileTrends(data);
             _renderMetrics(data);
             _renderTrend(data.months || []);
         } catch { /* leave placeholders */ }
+    }
+
+    // Modal section headings carry their icon as a data-icon name so the
+    // markup stays declarative and the SVG still comes from the one registry.
+    document.querySelectorAll('.rv-section-title[data-icon]').forEach(el => {
+        el.insertAdjacentHTML('afterbegin', icon(el.dataset.icon));
+    });
+
+    function _renderTileIcons() {
+        const map = {
+            scraped:  'inbox',
+            approved: 'check',
+            rejected: 'cross',
+            pending:  'clock',
+        };
+        Object.entries(map).forEach(([k, name]) => {
+            const el = document.getElementById(`rv-ic-${k}`);
+            if (el && !el.childElementCount) el.innerHTML = icon(name);
+        });
+        [['reviewed', 'clipboard'], ['avgtime', 'clock'], ['rate', 'chart']].forEach(([k, name]) => {
+            const el = document.getElementById(`rv-mi-${k}`);
+            if (el && !el.childElementCount) el.innerHTML = icon(name);
+        });
+    }
+
+    // ── Tile sparkline + month-over-month delta ────────────────────────────
+    // Both come from the `months` history already in the summary response, so
+    // the trend line and the percentage are the same real data the chart uses.
+
+    function _sparkline(values, tone) {
+        const pts = values.filter(v => v !== null && v !== undefined);
+        if (pts.length < 2) return '';
+        const W = 64, H = 22, P = 2;
+        const max = Math.max(...pts), min = Math.min(...pts);
+        const span = max - min || 1;
+        const x = i => P + (i * (W - 2 * P)) / (pts.length - 1);
+        const y = v => H - P - ((v - min) / span) * (H - 2 * P);
+        const d = pts.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+        return `
+            <svg class="rv-spark rv-spark-${tone}" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+                <path d="${d}"/>
+                <circle cx="${x(pts.length - 1).toFixed(1)}" cy="${y(pts[pts.length - 1]).toFixed(1)}" r="2"/>
+            </svg>`;
+    }
+
+    // A percentage needs a baseline. When the previous month is absent or zero
+    // there is no honest comparison to draw, so nothing is shown.
+    function _momDelta(months, key) {
+        const prevMonth = _shiftMonthStr(month, -1);
+        const cur  = months.find(m => m.month === month);
+        const prev = months.find(m => m.month === prevMonth);
+        if (!cur || !prev) return '';
+        const a = cur[key] ?? 0, b = prev[key] ?? 0;
+        const label = _shortMonth(prevMonth);
+        if (b === 0) return a === 0 ? '' : `<span class="rv-delta-flat">new vs ${label}</span>`;
+        const pct = Math.round(((a - b) / b) * 100);
+        if (pct === 0) return `<span class="rv-delta-flat">no change vs ${label}</span>`;
+        const up = pct > 0;
+        return `<span class="rv-delta-${up ? 'up' : 'down'}">${up ? '↑' : '↓'} ${Math.abs(pct)}% vs ${label}</span>`;
+    }
+
+    function _renderTileTrends(d) {
+        const months = d.months || [];
+        const TONES = { scraped: 'neutral', approved: 'approved', rejected: 'rejected', pending: 'pending' };
+
+        Object.keys(TONES).forEach(key => {
+            const spark = document.getElementById(`rv-spark-${key}`);
+            const delta = document.getElementById(`rv-delta-${key}`);
+            if (spark) spark.innerHTML = _sparkline(months.map(m => m[key] ?? 0), TONES[key]);
+            if (delta) delta.innerHTML = _momDelta(months, key);
+        });
+
+        // Pending is a live queue, not a monthly outcome: how long the oldest
+        // item has waited says more than a month-over-month percentage.
+        const pd = document.getElementById('rv-delta-pending');
+        if (pd) {
+            const h = d.oldest_pending_hours;
+            if (!d.pending)      pd.innerHTML = '<span class="rv-delta-flat">queue clear</span>';
+            else if (h == null)  pd.innerHTML = '';
+            else {
+                const age = h < 1  ? `${Math.round(h * 60)} min`
+                          : h < 48 ? `${Math.round(h)} hrs`
+                                   : `${Math.round(h / 24)} days`;
+                const stale = h >= 168;   // a week
+                pd.innerHTML = `<span class="rv-delta-${stale ? 'warn' : 'flat'}"
+                    title="Longest-waiting pending tender">oldest waiting ${age}</span>`;
+            }
+        }
     }
 
     function _renderMetrics(d) {
@@ -133,38 +232,114 @@ document.addEventListener('DOMContentLoaded', () => {
         rate.textContent = d.approval_rate == null ? '—' : `${d.approval_rate}%`;
     }
 
+    // Stacked bars in SVG so the chart can carry a real value axis and
+    // gridlines — a bar height means nothing without a scale to read it against.
+    let trendMonths = [];
+
     function _renderTrend(months) {
+        trendMonths = months;
         if (!months.length) {
             trendEl.innerHTML = '<span class="empty-msg">No data yet.</span>';
             return;
         }
-        const max = Math.max(...months.map(m => m.scraped), 1);
-        trendEl.innerHTML = months.map(m => {
-            const h  = x => Math.round((x / max) * 100);
-            const on = m.month === month ? ' rv-bar-current' : '';
-            return `
-                <div class="rv-bar-col${on}" data-month="${m.month}" title="${_prettyMonth(m.month)} — ${m.scraped} scraped · ${m.approved} approved · ${m.rejected} rejected · ${m.pending} pending">
-                    <span class="rv-bar-num">${m.scraped}</span>
-                    <div class="rv-bar-stack">
-                        <div class="rv-bar-seg rv-seg-pending"  style="height:${h(m.pending)}%"></div>
-                        <div class="rv-bar-seg rv-seg-rejected" style="height:${h(m.rejected)}%"></div>
-                        <div class="rv-bar-seg rv-seg-approved" style="height:${h(m.approved)}%"></div>
-                    </div>
-                    <span class="rv-bar-lbl">${_shortMonth(m.month).toUpperCase()}</span>
-                </div>`;
+
+        // The viewBox is sized to the container's actual pixel width so one
+        // SVG unit is one CSS pixel. Scaling a fixed viewBox to full width
+        // stretched the chart to ~325px tall and magnified the axis text with
+        // it; this keeps both at the size they were designed for.
+        const W = Math.max(Math.round(trendEl.clientWidth) || 900, 420);
+        const H = 194, PL = 40, PR = 14, PT = 22, PB = 28;
+        const iw = W - PL - PR, ih = H - PT - PB;
+        const max = _niceMax(Math.max(...months.map(m => m.scraped), 1));
+        const y   = v => PT + ih - (v / max) * ih;
+
+        // Cap the column width and centre the group, so two months don't sit
+        // marooned at opposite ends of the plot area.
+        const slot  = Math.min(iw / months.length, 120);
+        const x0    = PL + (iw - slot * months.length) / 2;
+        const barW  = Math.min(56, slot * 0.55);
+        const cx    = i => x0 + slot * i + slot / 2;
+
+        const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => {
+            const v = Math.round(max * f), yy = y(max * f);
+            return `<line class="rvc-grid" x1="${PL}" y1="${yy.toFixed(1)}" x2="${W - PR}" y2="${yy.toFixed(1)}"/>
+                    <text class="rvc-ytick" x="${PL - 10}" y="${(yy + 3.5).toFixed(1)}">${v}</text>`;
         }).join('');
-        // Clicking a trend bar jumps to that month
-        trendEl.querySelectorAll('.rv-bar-col').forEach(col => {
-            col.addEventListener('click', () => {
-                month = col.dataset.month;
-                refresh();
+
+        const bars = months.map((m, i) => {
+            const x = cx(i) - barW / 2;
+            const segs = [
+                ['approved', m.approved],
+                ['rejected', m.rejected],
+                ['pending',  m.pending],
+            ];
+            // Stack upward from the baseline: approved, then rejected, then
+            // pending — the three always sum to scraped.
+            let acc = 0;
+            const rects = segs.map(([tone, val]) => {
+                if (!val) return '';
+                const h  = (val / max) * ih;
+                const yy = PT + ih - h - acc;
+                acc += h;
+                return `<rect class="rvc-seg rvc-seg-${tone}" x="${x.toFixed(1)}" y="${yy.toFixed(1)}"
+                              width="${barW.toFixed(1)}" height="${h.toFixed(1)}"/>`;
+            }).join('');
+
+            const isCur = m.month === month;
+            return `
+                <g class="rvc-col${isCur ? ' rvc-col-current' : ''}" data-month="${m.month}" role="button" tabindex="0">
+                    <title>${_prettyMonth(m.month)} — ${m.scraped} scraped · ${m.approved} approved · ${m.rejected} rejected · ${m.pending} pending</title>
+                    <rect class="rvc-hit" x="${(cx(i) - slot / 2).toFixed(1)}" y="${PT}" width="${slot.toFixed(1)}" height="${ih}"/>
+                    ${rects}
+                    <text class="rvc-total" x="${cx(i).toFixed(1)}" y="${(y(m.scraped) - 8).toFixed(1)}">${m.scraped}</text>
+                    <text class="rvc-xtick" x="${cx(i).toFixed(1)}" y="${H - 12}">${_shortMonth(m.month).toUpperCase()}</text>
+                </g>`;
+        }).join('');
+
+        trendEl.innerHTML = `
+            <svg viewBox="0 0 ${W} ${H}" class="rvc-svg" role="img"
+                 aria-label="Tenders scraped per month, split by review status">
+                ${ticks}
+                <line class="rvc-axis" x1="${PL}" y1="${PT + ih}" x2="${W - PR}" y2="${PT + ih}"/>
+                ${bars}
+            </svg>`;
+
+        // Clicking a column jumps to that month
+        trendEl.querySelectorAll('.rvc-col').forEach(col => {
+            const go = () => { month = col.dataset.month; refresh(); };
+            col.addEventListener('click', go);
+            col.addEventListener('keydown', e => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
             });
         });
     }
 
+    // The viewBox is tied to the container's pixel width, so a resize has to
+    // redraw rather than just rescale.
+    let trendResizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(trendResizeTimer);
+        trendResizeTimer = setTimeout(() => {
+            if (trendMonths.length) _renderTrend(trendMonths);
+        }, 150);
+    });
+
+    // The axis draws four gridlines, so the top of the scale must divide by 4
+    // into whole tenders — otherwise the ticks read 8 / 15 / 23 instead of
+    // 6 / 12 / 18. Counts are integers, so the step must be one too.
+    const _AXIS_STEPS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 40, 50,
+                         60, 75, 100, 125, 150, 200, 250, 300, 400, 500, 750, 1000];
+
+    function _niceMax(n) {
+        for (const step of _AXIS_STEPS) {
+            if (step * 4 >= n) return step * 4;
+        }
+        return Math.ceil(n / 4) * 4;
+    }
+
     // ── Tender table ───────────────────────────────────────────────────────
     async function loadList() {
-        tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">Loading…</td></tr>';
+        tbodyEl.innerHTML = '<tr><td colspan="8" class="empty-msg">Loading…</td></tr>';
         try {
             let url = `/review/tenders?month=${month}`;
             if (statusFilter) url += `&status=${statusFilter}`;
@@ -176,7 +351,7 @@ document.addEventListener('DOMContentLoaded', () => {
             countLbl.textContent = `${tenders.length} tender${tenders.length === 1 ? '' : 's'}`;
             _renderTable();
         } catch {
-            tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">Could not load tenders.</td></tr>';
+            tbodyEl.innerHTML = '<tr><td colspan="8" class="empty-msg">Could not load tenders.</td></tr>';
         }
     }
 
@@ -190,7 +365,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
 
         if (!tenders.length) {
-            tbodyEl.innerHTML = '<tr><td colspan="7" class="empty-msg">No tenders match this view.</td></tr>';
+            tbodyEl.innerHTML = '<tr><td colspan="8" class="empty-msg">No tenders match this view.</td></tr>';
             return;
         }
 
@@ -221,20 +396,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const st    = t.review_status || 'pending';
         const byWho = t.reviewed_by_name ? ` · ${_esc(t.reviewed_by_name)}` : '';
         const statusPill = st === 'pending'
-            ? '<span class="rv-pill rv-pill-pending" title="Awaiting review">⏳ Pending</span>'
+            ? `<span class="rv-pill rv-pill-pending" title="Awaiting review">${icon('hourglass')}Pending</span>`
             : st === 'approved'
-                ? `<span class="rv-pill rv-pill-approved" title="Approved${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">✓ Approved${byWho}</span>`
-                : `<span class="rv-pill rv-pill-rejected" title="Rejected${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">✕ Rejected${byWho}</span>`;
+                ? `<span class="rv-pill rv-pill-approved" title="Approved${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">${icon('check')}Approved${byWho}</span>`
+                : `<span class="rv-pill rv-pill-rejected" title="Rejected${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">${icon('cross')}Rejected${byWho}</span>`;
         const idTag = `${t.source === 'taiq' ? 'T' : 'M'}-${t.id}`;
+        const method = t.source === 'taiq'
+            ? `${icon('bot')}TAiQ` : `${icon('search')}Manual`;
         return `
             <tr class="rv-tr rv-tr-${st}" data-source="${t.source}" data-id="${t.id}">
                 <td class="rv-td-id">${idTag}</td>
                 <td class="rv-td-title" title="${_esc(t.title || '')}">${_esc(t.title || 'Unknown Opportunity')}</td>
                 <td><span class="site-badge site-${_esc(t.site)}">${_esc((t.site || '').toUpperCase())}</span></td>
                 <td><span class="kw-tag">${_esc(t.keyword || '')}</span></td>
-                <td class="rv-td-src">${t.source === 'taiq' ? '🤖 TAiQ' : '🔍 Manual'}</td>
+                <td class="rv-td-src">${method}</td>
                 <td class="rv-td-date">${_prettyDT(t.found_at)}</td>
                 <td>${statusPill}</td>
+                <td class="rv-td-act">
+                    <button type="button" class="rv-row-open" aria-label="Open review for ${idTag}">
+                        ${icon('edit')}
+                    </button>
+                </td>
             </tr>`;
     }
 
@@ -263,8 +445,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function _renderModal(t, comments) {
         const st = t.review_status || 'pending';
-        mBadge.textContent = st === 'approved' ? '✅ Approved'
-                           : st === 'rejected' ? '❌ Rejected' : '⏳ Pending';
+        mBadge.innerHTML = st === 'approved' ? `${icon('check')}Approved`
+                         : st === 'rejected' ? `${icon('cross')}Rejected`
+                                             : `${icon('hourglass')}Pending`;
         mBadge.className   = `rv-status-badge rv-badge-${st}`;
         mSite.textContent  = (t.site || '').toUpperCase();
         mSite.className    = `site-badge site-${t.site}`;
@@ -276,7 +459,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? ` by <strong>${_esc(t.reviewed_by_name)}</strong>` : '';
             mReviewInfo.classList.remove('hidden');
             mReviewInfo.innerHTML =
-                `${st === 'approved' ? '✅' : '❌'} <strong>${_esc(st)}</strong>${by}` +
+                `${icon(st === 'approved' ? 'check' : 'cross')}<strong>${_esc(st)}</strong>${by}` +
                 ` on ${_prettyDT(t.reviewed_at)}`;
         } else {
             mReviewInfo.classList.add('hidden');
@@ -295,7 +478,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Links
         let links = '';
         if (t.url)        links += `<a href="${_esc(t.url)}" target="_blank" class="card-link">View source ↗</a>`;
-        if (t.tender_dir) links += `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}" class="rv-dl-all" download>⬇ Download All Files</a>`;
+        if (t.tender_dir) links += `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken() || '')}" class="rv-dl-all" download>${icon('download')}Download All Files</a>`;
         mLinks.innerHTML = links;
 
         _loadFiles(t.tender_dir);
@@ -361,15 +544,16 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
         mComments.innerHTML = comments.map(c => {
-            const icon = c.action === 'approved' ? '✅'
-                       : c.action === 'rejected' ? '❌' : '💬';
+            // Not named `icon` — that would shadow the global icon() helper.
+            const glyph = icon(c.action === 'approved' ? 'check'
+                             : c.action === 'rejected' ? 'cross' : 'chat');
             const act  = c.action === 'comment' ? 'commented'
                        : `marked as <strong>${_esc(c.action)}</strong>`;
             const name = c.username ? _esc(c.username) : 'A team member';
             return `
                 <div class="rv-comment rv-comment-${_esc(c.action)}">
                     <div class="rv-comment-head">
-                        <span>${icon} <strong>${name}</strong> ${act}</span>
+                        <span>${glyph} <strong>${name}</strong> ${act}</span>
                         <span class="rv-comment-ts">${_prettyDT(c.created_at)}</span>
                     </div>
                     <div class="rv-comment-body">${_esc(c.comment)}</div>
@@ -446,10 +630,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Utilities ──────────────────────────────────────────────────────────
     function _shiftMonth(delta) {
-        const [y, m] = month.split('-').map(Number);
-        const d = new Date(y, m - 1 + delta, 1);
-        month = _monthStr(d);
+        month = _shiftMonthStr(month, delta);
         refresh();
+    }
+
+    function _shiftMonthStr(m, delta) {
+        const [y, mo] = m.split('-').map(Number);
+        return _monthStr(new Date(y, mo - 1 + delta, 1));
     }
 
     function _monthStr(d) {

@@ -63,15 +63,21 @@ def _redact_comments(user: dict, comments: list) -> list:
 async def review_summary(
     request: Request,
     month: str = Query(default=None),
+    months: int = Query(default=6, ge=2, le=24),
     _user: dict = _auth,
 ):
+    """Month counts, review metrics, and the trailing history the tiles and the
+    trend chart both read. `months` sizes that history — the chart offers a
+    4/6/12-month window, and the tiles need the previous month for their delta.
+    """
     month = _valid_month(month)
     if not month:
         return JSONResponse({"error": "month must be YYYY-MM"}, status_code=400)
     team_id = _user.get("team_id", "cnk")
     db      = request.app.state.db
     summary = db.get_review_summary(month, team_id=team_id)
-    return {"month": month, **summary, "months": db.get_review_months(6, team_id=team_id)}
+    return {"month": month, **summary,
+            "months": db.get_review_months(months, team_id=team_id, end_month=month)}
 
 
 @router.get("/tenders")

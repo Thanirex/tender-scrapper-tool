@@ -10,12 +10,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const calGrid     = document.getElementById('cal-grid');
     const calLabel    = document.getElementById('cal-month-label');
-    const statsRow    = document.getElementById('stats-row');
+    const kpiRow      = document.getElementById('kpi-row');
     const actWrap     = document.getElementById('activity-wrap');
     const tendersGrid = document.getElementById('tenders-grid');
     const dateLabel   = document.getElementById('selected-date-label');
     const filterSite  = document.getElementById('filter-site');
     const filterKw    = document.getElementById('filter-keyword');
+
+    // Greet by name — the sidebar already says *where* you are, the header
+    // says *who* you are and what this page is reporting on.
+    const welcomeEl = document.getElementById('welcome-name');
+    if (welcomeEl) welcomeEl.textContent = (getUser() || {}).username || 'there';
+
+    // Shared state across the KPI row, the chart and the sources panel, so a
+    // single fetch of each feeds every consumer.
+    let overview     = null;   // all-time totals   (/dashboard/overview)
+    let reportSeries = [];     // per-day series    (/dashboard/report)
+    let periodSites  = [];     // by_site for the calendar selection
 
     document.getElementById('cal-prev').addEventListener('click', () => {
         calMonth--;
@@ -45,18 +56,22 @@ document.addEventListener('DOMContentLoaded', () => {
         const { run } = await res.json();
         latestTaiqRun = run;
         renderTaiqWidget(run);
-        // Refresh the "Last Tender Update" stat card in place (stats row may
-        // have been rendered before this poll returned)
-        const luCard = document.getElementById('last-update-card');
-        if (luCard) luCard.outerHTML = _lastUpdateCardHtml();
+        // The Last Run KPI is driven by this poll, so redraw the row whenever
+        // a poll lands — it may well arrive after the row first rendered.
+        renderKpiRow();
         clearInterval(taiqPollTimer);
         taiqPollTimer = setInterval(loadTaiqStatus, run && run.status === 'running' ? 8000 : 60000);
     }
 
-    // ── "Last Tender Update" stat card ─────────────────────────────────────
-    function _lastUpdateCardHtml() {
+    // ── KPI row ────────────────────────────────────────────────────────────
+    // Four executive-level figures, each with an explicit scope label. The
+    // scope matters: Total Tenders is all-time, Scraped is today only. The
+    // old per-site cards claimed "All time" while showing the selected date's
+    // counts, which is exactly the contradiction these labels prevent.
+
+    function _lastRunKpi() {
         const r = latestTaiqRun;
-        let timeStr = '—', dateStr = 'No runs yet', statusLbl = '—', color = '#94a3b8';
+        let timeStr = '—', dateStr = 'No runs yet', statusLbl = 'Idle', tone = 'idle';
         if (r) {
             const isRunning = r.status === 'running';
             const iso = (isRunning ? r.started_at : (r.finished_at || r.started_at)) || '';
@@ -65,22 +80,95 @@ document.addEventListener('DOMContentLoaded', () => {
                 timeStr = iso.split('T')[1].substring(0, 5);
             }
             const map = {
-                running:  ['Running',   '#f59e0b'],
-                complete: ['Completed', '#22c55e'],
-                failed:   ['Failed',    '#ef4444'],
-                stopped:  ['Stopped',   '#a855f7'],
+                running:  ['Running',   'running'],
+                complete: ['Completed', 'complete'],
+                failed:   ['Failed',    'failed'],
+                stopped:  ['Stopped',   'stopped'],
             };
-            [statusLbl, color] = map[r.status] || [r.status, '#94a3b8'];
+            [statusLbl, tone] = map[r.status] || [r.status, 'idle'];
         }
+        return { timeStr, dateStr, statusLbl, tone };
+    }
+
+    function _kpiCard({ tone, glyph, label, value, sub, foot }) {
         return `
-            <div class="stat-card-v2 scard-lastupdate" id="last-update-card">
-                <div class="sc2-icon">🕒</div>
-                <span class="sc2-num sc2-num-time">${timeStr}</span>
-                <span class="sc2-label">Last Tender Update · ${dateStr}</span>
-                <span class="lu-status" style="color:${color}">
-                    <span class="lu-status-dot" style="background:${color}"></span>${statusLbl}
-                </span>
+            <div class="kpi-card kpi-${tone}">
+                <div class="kpi-icon">${icon(glyph)}</div>
+                <div class="kpi-body">
+                    <span class="kpi-label">${label}</span>
+                    <span class="kpi-value">${value}</span>
+                    <span class="kpi-sub">${sub}</span>
+                </div>
+                ${foot || ''}
             </div>`;
+    }
+
+    // A real delta or nothing at all. Decorative percentages with no baseline
+    // behind them are worse than no trend indicator.
+    function _kpiDelta(curr, prev, unit) {
+        if (prev === null || prev === undefined) return '';
+        const diff = curr - prev;
+        if (diff === 0) return `<span class="kpi-delta kpi-delta-flat">no change ${unit}</span>`;
+        const cls = diff > 0 ? 'kpi-delta-up' : 'kpi-delta-down';
+        const arrow = diff > 0 ? '↑' : '↓';
+        return `<span class="kpi-delta ${cls}">${arrow} ${Math.abs(diff)} ${unit}</span>`;
+    }
+
+    function renderKpiRow() {
+        if (!kpiRow) return;
+
+        const todayRow = reportSeries[0] || null;
+        const yestRow  = reportSeries[1] || null;
+        const lr       = _lastRunKpi();
+
+        const totalAll   = overview ? overview.total_tenders  : null;
+        const pendingAll = overview ? overview.pending_review : null;
+        const scrapedToday = todayRow ? todayRow.scraped : null;
+
+        const cards = [
+            _kpiCard({
+                tone: 'total', glyph: 'layers',
+                label: 'Total Tenders',
+                value: totalAll === null ? '—' : totalAll.toLocaleString(),
+                sub:   'All time · every source',
+                foot:  scrapedToday
+                    ? `<span class="kpi-delta kpi-delta-up">↑ ${scrapedToday} today</span>`
+                    : '<span class="kpi-delta kpi-delta-flat">no new tenders today</span>',
+            }),
+            _kpiCard({
+                tone: 'scraped', glyph: 'inbox',
+                label: 'Tenders Scraped',
+                value: scrapedToday === null ? '—' : scrapedToday,
+                sub:   'Today',
+                foot:  yestRow ? _kpiDelta(todayRow.scraped, yestRow.scraped, 'vs yesterday') : '',
+            }),
+            _kpiCard({
+                tone: pendingAll ? 'pending-live' : 'pending', glyph: 'eye',
+                label: 'Pending Review',
+                value: pendingAll === null ? '—' : pendingAll,
+                sub:   pendingAll ? 'Needs your attention' : 'Everything reviewed',
+                foot:  pendingAll
+                    ? '<a class="kpi-link" href="/status">Review now →</a>' : '',
+            }),
+            _kpiCard({
+                tone: 'lastrun', glyph: 'clock',
+                label: 'Last Run',
+                value: lr.timeStr,
+                sub:   lr.dateStr,
+                foot:  `<span class="kpi-run-status kpi-run-${lr.tone}">
+                            <span class="kpi-run-dot"></span>${lr.statusLbl}
+                        </span>`,
+            }),
+        ];
+        kpiRow.innerHTML = cards.join('');
+    }
+
+    async function loadOverview() {
+        const res = await authFetch('/dashboard/overview');
+        if (!res) return;
+        overview = await res.json();
+        renderKpiRow();
+        renderSources();
     }
 
     function renderTaiqWidget(run) {
@@ -137,13 +225,39 @@ document.addEventListener('DOMContentLoaded', () => {
     loadTaiqStatus();
 
     // ── Last 3 days report cards ───────────────────────────────────────────
-    async function loadDailyReport() {
+    // The primary number gets a radial anchor so the eye lands on it before
+    // reading anything else; the ring encodes review progress for that day.
+
+    const _RING_R = 34;
+    const _RING_C = 2 * Math.PI * _RING_R;
+
+    function _radial(value, pct, label, tone) {
+        const dash = (Math.max(0, Math.min(100, pct)) / 100) * _RING_C;
+        // A zero-length dash still paints a dot under stroke-linecap:round,
+        // which reads as "1% done" on a day with nothing to show. Omit the arc.
+        const arc = dash > 0 ? `
+                    <circle cx="40" cy="40" r="${_RING_R}" class="drc-ring-fill drc-ring-${tone}"
+                            stroke-dasharray="${dash.toFixed(1)} ${(_RING_C - dash).toFixed(1)}"
+                            transform="rotate(-90 40 40)"/>` : '';
+        // The caption sits below the ring, not inside it: fitting it in the
+        // centre forced it down to a barely-legible size.
+        return `
+            <div class="drc-radial">
+                <div class="drc-ring-wrap">
+                    <svg viewBox="0 0 80 80" class="drc-ring" aria-hidden="true">
+                        <circle cx="40" cy="40" r="${_RING_R}" class="drc-ring-track"/>${arc}
+                    </svg>
+                    <span class="drc-num">${value}</span>
+                </div>
+                <span class="drc-num-label">${label}</span>
+            </div>`;
+    }
+
+    function renderDailyReport() {
         const row = document.getElementById('daily-report-row');
         if (!row) return;
-        const res = await authFetch('/dashboard/report?days=3');
-        if (!res) return;
-        const { days } = await res.json();
-        if (!days || !days.length) { row.innerHTML = ''; return; }
+        const days = reportSeries.slice(0, 3);
+        if (!days.length) { row.innerHTML = ''; return; }
 
         const names = ['Today', 'Yesterday'];
         row.innerHTML = days.map((d, i) => {
@@ -152,49 +266,255 @@ document.addEventListener('DOMContentLoaded', () => {
             const reviewed = d.approved + d.rejected;
             const pct      = d.scraped ? Math.round(100 * reviewed / d.scraped) : 0;
             const downloaded = d.downloaded ?? 0;
-            const dlPct    = d.scraped ? Math.round(100 * downloaded / d.scraped) : 0;
             const chipMap  = {
-                complete: ['Run complete', 'drc-chip-complete'],
-                running:  ['Running now',  'drc-chip-running'],
-                failed:   ['Run failed',   'drc-chip-failed'],
-                stopped:  ['Run stopped',  'drc-chip-stopped'],
+                complete: ['Run complete', 'drc-chip-complete', 'complete'],
+                running:  ['Running now',  'drc-chip-running',  'running'],
+                failed:   ['Run failed',   'drc-chip-failed',   'failed'],
+                stopped:  ['Run stopped',  'drc-chip-stopped',  'stopped'],
             };
-            const [chipLbl, chipCls] = chipMap[d.taiq_status] || ['No data run', 'drc-chip-none'];
+            const [chipLbl, chipCls, tone] = chipMap[d.taiq_status] || ['No data run', 'drc-chip-none', 'none'];
             return `
             <div class="day-report-card${i === 0 ? ' drc-today' : ''}">
                 <div class="drc-head">
                     <span class="drc-day">${name}${sub ? ` <span class="drc-date">· ${sub}</span>` : ''}</span>
                     <span class="drc-chip ${chipCls}">${chipLbl}</span>
                 </div>
-                <div class="drc-main">
-                    <span class="drc-num">${d.scraped}</span>
-                    <span class="drc-num-label">tender${d.scraped !== 1 ? 's' : ''} scraped</span>
+                <div class="drc-body">
+                    ${_radial(d.scraped, pct, `tender${d.scraped !== 1 ? 's' : ''} scraped`, tone)}
+                    <div class="drc-meta">
+                        <div class="drc-meta-row">
+                            <span class="drc-meta-k">${icon('globe')}Sites scanned</span>
+                            <b>${d.sites_scanned}</b>
+                        </div>
+                        <div class="drc-meta-row">
+                            <span class="drc-meta-k">${icon('key')}Keywords</span>
+                            <b>${(d.keywords ?? 0).toLocaleString()}</b>
+                        </div>
+                        <div class="drc-meta-row">
+                            <span class="drc-meta-k">${icon('bot')}TAiQ</span>
+                            <b>${d.taiq}</b>
+                        </div>
+                        <div class="drc-meta-row">
+                            <span class="drc-meta-k">${icon('user')}Manual</span>
+                            <b>${d.manual}</b>
+                        </div>
+                    </div>
                 </div>
-                <div class="drc-line">🤖 TAiQ: <b>${d.taiq}</b> &nbsp;·&nbsp; 👤 Manual: <b>${d.manual}</b></div>
-                <div class="drc-line">🌐 Sites scanned: <b>${d.sites_scanned}</b> &nbsp;·&nbsp; Keywords: <b>${d.keywords ?? 0}</b></div>
                 <div class="drc-review">
-                    <span class="drc-rv drc-rv-app" title="Approved">✅ ${d.approved}</span>
-                    <span class="drc-rv drc-rv-rej" title="Rejected">❌ ${d.rejected}</span>
-                    <span class="drc-rv drc-rv-pen" title="Awaiting review">⏳ ${d.pending} pending</span>
+                    <span class="drc-rv drc-rv-app" title="Approved">${icon('check')}${d.approved}</span>
+                    <span class="drc-rv drc-rv-rej" title="Rejected">${icon('cross')}${d.rejected}</span>
+                    <span class="drc-rv drc-rv-pen" title="Awaiting review">${icon('hourglass')}${d.pending} pending</span>
                     ${d.approval_rate !== null && d.approval_rate !== undefined
                         ? `<span class="drc-rv-rate">${d.approval_rate}% approved</span>` : ''}
                 </div>
-                <div class="drc-bars">
-                    <div class="drc-bar-track" title="${pct}% of this day's tenders reviewed">
-                        <div class="drc-bar-fill" style="width:${pct}%"></div>
-                    </div>
-                    <div class="drc-bar-label">${reviewed} of ${d.scraped} reviewed</div>
-                    <div class="drc-bar-track" title="${dlPct}% of this day's tenders have documents saved">
-                        <div class="drc-bar-fill drc-bar-fill-dl" style="width:${dlPct}%"></div>
-                    </div>
-                    <div class="drc-bar-label">${downloaded} of ${d.scraped} downloaded</div>
+                <div class="drc-foot">
+                    <span title="${reviewed} of ${d.scraped} tenders reviewed">${icon('clipboard')}${reviewed} Reviewed</span>
+                    <span title="${downloaded} of ${d.scraped} tenders have documents saved">${icon('download')}${downloaded} Downloaded</span>
                 </div>
             </div>`;
         }).join('');
     }
 
-    loadDailyReport();
-    setInterval(loadDailyReport, 5 * 60 * 1000);   // stays fresh across midnight
+    // ── Performance overview chart ─────────────────────────────────────────
+    const perfTabs  = document.getElementById('perf-tabs');
+    const perfRange = document.getElementById('perf-range');
+    const perfChart = document.getElementById('perf-chart');
+    let perfMetric  = 'scraped';
+
+    const _METRIC_LABEL = {
+        scraped:       'tenders scraped',
+        sites_scanned: 'sites scanned',
+        keywords:      'keywords',
+    };
+
+    if (perfTabs) {
+        perfTabs.addEventListener('click', e => {
+            const btn = e.target.closest('.perf-tab');
+            if (!btn) return;
+            perfTabs.querySelectorAll('.perf-tab').forEach(b => {
+                const on = b === btn;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+            });
+            perfMetric = btn.dataset.metric;
+            renderPerfChart();
+        });
+    }
+    if (perfRange) {
+        perfRange.addEventListener('change', () => loadReport(parseInt(perfRange.value, 10)));
+    }
+
+    // Hand-rolled inline SVG — the page already avoids chart CDNs, and an
+    // area+line over at most 30 points needs no library.
+    function renderPerfChart() {
+        if (!perfChart) return;
+        const pts = reportSeries.slice().reverse();   // oldest → newest
+        if (!pts.length) {
+            perfChart.innerHTML = '<p class="empty-msg">No run history yet.</p>';
+            return;
+        }
+
+        const W = 640, H = 220, PL = 38, PR = 14, PT = 18, PB = 30;
+        const vals = pts.map(d => Number(d[perfMetric]) || 0);
+        const rawMax = Math.max(...vals);
+        const max = rawMax > 0 ? _niceCeil(rawMax) : 10;
+        const iw = W - PL - PR, ih = H - PT - PB;
+        const x = i => PL + (pts.length === 1 ? iw / 2 : (i * iw) / (pts.length - 1));
+        const y = v => PT + ih - (v / max) * ih;
+
+        const line = vals.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+        const area = `${line} L${x(vals.length - 1).toFixed(1)},${(PT + ih).toFixed(1)} L${x(0).toFixed(1)},${(PT + ih).toFixed(1)} Z`;
+
+        // 4 horizontal gridlines with value labels
+        const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => {
+            const v = Math.round(max * f);
+            const yy = y(max * f);
+            return `<line class="pc-grid" x1="${PL}" y1="${yy.toFixed(1)}" x2="${W - PR}" y2="${yy.toFixed(1)}"/>
+                    <text class="pc-ytick" x="${PL - 8}" y="${(yy + 3.5).toFixed(1)}">${v}</text>`;
+        }).join('');
+
+        // Only label a few dates so the axis never crowds at 30 days
+        const step = Math.max(1, Math.ceil(pts.length / 7));
+        const xLabels = pts.map((d, i) => {
+            if (i % step !== 0 && i !== pts.length - 1) return '';
+            const [, m, dd] = d.date.split('-');
+            const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(m, 10) - 1];
+            return `<text class="pc-xtick" x="${x(i).toFixed(1)}" y="${H - 8}">${parseInt(dd, 10)} ${mon}</text>`;
+        }).join('');
+
+        const dots = vals.map((v, i) => {
+            const last = i === vals.length - 1;
+            return `<circle class="pc-dot${last ? ' pc-dot-last' : ''}" cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="${last ? 5 : 3.2}">
+                        <title>${_pretty(pts[i].date)} — ${v} ${_METRIC_LABEL[perfMetric]}</title>
+                    </circle>`;
+        }).join('');
+
+        const lastV = vals[vals.length - 1];
+        const lx = Math.min(x(vals.length - 1), W - PR - 34);
+        const callout = `
+            <g class="pc-callout" transform="translate(${lx.toFixed(1)},${Math.max(y(lastV) - 26, PT + 2).toFixed(1)})">
+                <rect x="-24" y="-13" width="48" height="20" rx="6"/>
+                <text x="0" y="1.5">${lastV}</text>
+            </g>`;
+
+        perfChart.innerHTML = `
+            <svg viewBox="0 0 ${W} ${H}" class="perf-svg" role="img"
+                 aria-label="${_METRIC_LABEL[perfMetric]} over the last ${pts.length} days">
+                <defs>
+                    <linearGradient id="pcFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%"   stop-color="var(--accent)" stop-opacity="0.26"/>
+                        <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                ${ticks}
+                <path class="pc-area" d="${area}"/>
+                <path class="pc-line" d="${line}"/>
+                ${dots}
+                ${callout}
+                ${xLabels}
+            </svg>`;
+    }
+
+    function _niceCeil(n) {
+        const mag  = Math.pow(10, Math.floor(Math.log10(n)));
+        const step = n / mag <= 2 ? 0.5 * mag : n / mag <= 5 ? mag : 2 * mag;
+        return Math.ceil(n / step) * step;
+    }
+
+    // One fetch, three consumers: KPI deltas, the activity cards, the chart.
+    async function loadReport(days = 7) {
+        const res = await authFetch(`/dashboard/report?days=${days}`);
+        if (!res) return;
+        const { days: rows } = await res.json();
+        reportSeries = rows || [];
+        renderDailyReport();
+        renderPerfChart();
+        renderKpiRow();
+    }
+
+    // ── Top sources ────────────────────────────────────────────────────────
+    // Fifteen equally-weighted site cards do not scale past a handful of
+    // sources. A ranked list does, and it makes "which source produces the
+    // most?" answerable at a glance.
+    const srcList   = document.getElementById('src-list');
+    const srcMore   = document.getElementById('src-more');
+    const srcScope  = document.getElementById('sources-scope');
+    let srcExpanded = false;
+
+    if (srcScope) {
+        srcScope.addEventListener('change', () => { srcExpanded = false; renderSources(); });
+    }
+    if (srcMore) {
+        srcMore.addEventListener('click', () => { srcExpanded = !srcExpanded; renderSources(); });
+    }
+
+    function renderSources() {
+        if (!srcList) return;
+        const allTime = !srcScope || srcScope.value === 'all';
+        const rows = (allTime ? (overview && overview.by_site) : periodSites) || [];
+        const sorted = rows.slice().sort((a, b) => b.count - a.count).filter(r => r.count > 0);
+
+        if (!sorted.length) {
+            srcList.innerHTML = `<p class="empty-msg">${
+                allTime ? 'No tenders recorded yet.' : 'No tenders in the selected period.'
+            }</p>`;
+            if (srcMore) srcMore.hidden = true;
+            return;
+        }
+
+        const top  = sorted[0].count;
+        const show = srcExpanded ? sorted : sorted.slice(0, 5);
+        srcList.innerHTML = show.map((s, i) => {
+            const key   = String(s.site || '').toLowerCase();
+            const label = _siteShortLabel(s);
+            const color = _siteColor(key);
+            const pct   = Math.max(Math.round((s.count / top) * 100), 3);
+            return `
+                <div class="src-row">
+                    <span class="src-rank">${i + 1}</span>
+                    <span class="src-dot" style="background:${color}"></span>
+                    <span class="src-name" title="${_escapeHtml(_siteLabel(s))}">${_escapeHtml(label)}</span>
+                    <span class="src-bar"><span class="src-bar-fill" style="width:${pct}%;background:${color}"></span></span>
+                    <span class="src-count">${s.count}</span>
+                </div>`;
+        }).join('');
+
+        if (srcMore) {
+            srcMore.hidden = sorted.length <= 5;
+            srcMore.textContent = srcExpanded
+                ? 'Show top 5' : `View all ${sorted.length} sources`;
+        }
+    }
+
+    // ── Quick actions ──────────────────────────────────────────────────────
+    (function renderQuickActions() {
+        const wrap = document.getElementById('qa-list');
+        if (!wrap) return;
+        const actions = [
+            { href: '/',          tone: 'a', glyph: 'play',  title: 'Run Scraper',  sub: 'Start a new data extraction', role: 'user'  },
+            { href: '/taiq-work', tone: 'b', glyph: 'bot',   title: 'TAiQ Status',  sub: 'Check system health & current status', role: 'user' },
+            { href: '/status',    tone: 'c', glyph: 'file',  title: 'View Reports', sub: 'Check analytics & insights', role: 'user' },
+            { href: '/users',     tone: 'd', glyph: 'users', title: 'Manage Users', sub: 'Add or manage team access', role: 'admin' },
+        ].filter(a => hasRole(a.role));
+
+        wrap.innerHTML = actions.map(a => `
+            <a class="qa-item qa-${a.tone}" href="${a.href}">
+                <span class="qa-icon">${icon(a.glyph)}</span>
+                <span class="qa-text">
+                    <strong>${a.title}</strong>
+                    <span>${a.sub}</span>
+                </span>
+                <span class="qa-arrow" aria-hidden="true">→</span>
+            </a>`).join('');
+    })();
+
+    loadOverview();
+    loadReport(parseInt((perfRange && perfRange.value) || '7', 10));
+    // Stays fresh across midnight and while a run is in progress.
+    setInterval(() => {
+        loadOverview();
+        loadReport(parseInt((perfRange && perfRange.value) || '7', 10));
+    }, 5 * 60 * 1000);
 
     // Load dates that have data, then bootstrap
     authFetch('/dashboard/dates')
@@ -449,10 +769,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // its `display_name` in sites_config.json, which the server sends with each
     // row — so a newly added site shows up correctly with no change here.
     const _SITE_CFG = {
-        ungm:   { icon: '🌐', label: 'UNGM',   cls: 'scard-ungm'   },
-        devnet: { icon: '💼', label: 'DevNet', cls: 'scard-devnet' },
-        ngobox: { icon: '📦', label: 'NGOBox', cls: 'scard-ngobox' },
-        taiq:   { icon: '🤖', label: 'TAiQ',   cls: 'scard-taiq'   },
+        ungm:   { label: 'UNGM'   },
+        devnet: { label: 'DevNet' },
+        ngobox: { label: 'NGOBox' },
+        taiq:   { label: 'TAiQ'   },
     };
 
     // Stable per-site accent colour so every site gets a distinct, consistent
@@ -503,8 +823,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function loadStats(dateStr, startDate = null, endDate = null) {
-        statsRow.innerHTML = '';
-        actWrap.innerHTML  = '<p class="empty-msg">Loading…</p>';
+        actWrap.innerHTML = '<p class="empty-msg">Loading…</p>';
 
         const runActivitySection = document.getElementById('run-activity-section');
         const isMultiDay = Boolean(startDate && endDate && startDate !== endDate);
@@ -520,59 +839,17 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!res) return;
         const data = await res.json();
 
-        // ── Stat cards v2 ──────────────────────────────────────────────────
+        // ── Sources for the selected period ────────────────────────────────
+        // These counts are scoped to the calendar selection, so they feed the
+        // Top Sources panel's "Selected period" mode — never a card claiming
+        // "All time", which is what the KPI row is for.
         const siteTotals = data.by_site || [];
         const grandTotal = siteTotals.reduce((s, x) => s + x.count, 0);
+        periodSites = siteTotals;
+        renderSources();
 
-        if (siteTotals.length === 0) {
-            statsRow.innerHTML = `
-                <div class="stat-card-v2 scard-runs" style="text-align:center">
-                    <div class="sc2-icon">📋</div>
-                    <span class="sc2-num">0</span>
-                    <span class="sc2-label">No activity for this date</span>
-                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:0%"></div></div>
-                </div>` + _lastUpdateCardHtml();
-        } else {
+        if (siteTotals.length > 0) {
             allSites = new Set(siteTotals.map(s => s.site));
-
-            const totalCard = `
-                <div class="stat-card-v2 scard-total">
-                    <div class="sc2-icon">📊</div>
-                    <span class="sc2-num">${grandTotal}</span>
-                    <span class="sc2-label">Total Tenders</span>
-                    <span class="sc2-sub">All time</span>
-                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
-                </div>`;
-
-            const siteCards = siteTotals.map(s => {
-                const key = String(s.site || '').toLowerCase();
-                const cfg = _SITE_CFG[key];
-                const label = _siteShortLabel(s);
-                const icon = cfg?.icon || '📌';
-                const pct = grandTotal > 0 ? Math.max(Math.round((s.count / grandTotal) * 100), 5) : 5;
-                // Sites without a bespoke class get their accent inline, so they
-                // never render as an unstyled card.
-                const accent = cfg ? '' : ` style="--scard-accent:${_siteColor(key)}"`;
-                return `
-                    <div class="stat-card-v2 ${cfg?.cls || 'scard-generic'}"${accent}>
-                        <div class="sc2-icon">${icon}</div>
-                        <span class="sc2-num">${s.count}</span>
-                        <span class="sc2-label" title="${_escapeHtml(_siteLabel(s))}">${_escapeHtml(label)}</span>
-                        <span class="sc2-sub">All time</span>
-                        <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:${pct}%"></div></div>
-                    </div>`;
-            }).join('');
-
-            const runsCard = `
-                <div class="stat-card-v2 scard-runs">
-                    <div class="sc2-icon">▶</div>
-                    <span class="sc2-num">${data.sessions.length}</span>
-                    <span class="sc2-label">Runs</span>
-                    <span class="sc2-sub">Selected period</span>
-                    <div class="sc2-bar-track"><div class="sc2-bar-fill" style="width:100%"></div></div>
-                </div>`;
-
-            statsRow.innerHTML = totalCard + siteCards + runsCard + _lastUpdateCardHtml();
 
             const currentVal = filterSite.value;
             isUpdatingDropdown = true;
@@ -613,7 +890,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!data.sessions || data.sessions.length === 0) {
             actWrap.innerHTML = `
                 <div class="dash-empty-state">
-                    <span class="des-icon">🗓️</span>
+                    <span class="des-icon">${icon('calendar')}</span>
                     <span class="des-title">No runs on this date</span>
                     <span class="des-sub">Manual scrapes and TAiQ runs will appear here</span>
                 </div>`;
@@ -645,7 +922,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         ${data.sessions.map(s => `
                             <tr${s.source === 'taiq' ? ' class="taiq-activity-row"' : ''}>
                                 <td style="white-space:nowrap">
-                                    ${_statusDot(s)}<strong>${s.source === 'taiq' ? '🤖 ' : ''}${s.username}</strong>
+                                    ${_statusDot(s)}<strong>${s.source === 'taiq' ? icon('bot', 'ic-inline') : ''}${s.username}</strong>
                                 </td>
                                 <td><span class="site-badge site-${s.site}" title="${_escapeHtml(_siteLabel(s))}">${_escapeHtml(_siteShortLabel(s))}</span></td>
                                 <td class="keywords-cell">${_truncKw(s.keywords)}</td>
@@ -718,7 +995,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isFiltered = filterSite.value || filterKw.value.trim();
             tendersGrid.innerHTML = `
                 <div class="dash-empty-state">
-                    <span class="des-icon">${isFiltered ? '🔍' : '📭'}</span>
+                    <span class="des-icon">${icon(isFiltered ? 'search' : 'tray')}</span>
                     <span class="des-title">${isFiltered ? 'No tenders found' : 'No tenders yet'}</span>
                     <span class="des-sub">${isFiltered ? 'Try adjusting your filters or keywords' : 'TAiQ and manual runs will populate this once they complete'}</span>
                 </div>`;
@@ -769,14 +1046,15 @@ document.addEventListener('DOMContentLoaded', () => {
         if (titleEl) titleEl.textContent = tender.title || 'Opportunity Details';
 
         const rvStatus = tender.review_status || 'pending';
-        const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
+        const rvIcon   = icon(rvStatus === 'approved' ? 'check'
+                            : rvStatus === 'rejected' ? 'cross' : 'hourglass');
 
         if (pillsEl) {
             pillsEl.innerHTML = `
                 <span class="site-badge site-${tender.site}" title="${_escapeHtml(_siteLabel(tender))}">${_escapeHtml(_siteShortLabel(tender))}</span>
                 <span class="kw-tag">${_escapeHtml(tender.keyword || '')}</span>
                 <span class="td-mpill td-mpill-${rvStatus}">${rvIcon} ${rvStatus}</span>
-                ${tender.source === 'taiq' ? '<span class="taiq-source-tag">🤖 TAiQ Auto</span>' : ''}
+                ${tender.source === 'taiq' ? `<span class="taiq-source-tag">${icon('bot')}TAiQ Auto</span>` : ''}
             `;
         }
 
@@ -804,9 +1082,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         if (tender.tender_dir) {
             const dlUrl = `/download/tender?path=${encodeURIComponent(tender.tender_dir)}&token=${encodeURIComponent(getToken())}`;
-            linksHtml += `<a href="${dlUrl}" class="td-modal-btn secondary-btn" download>⬇ Download All Files</a>`;
+            linksHtml += `<a href="${dlUrl}" class="td-modal-btn secondary-btn" download>${icon('download')}Download All Files</a>`;
         }
-        linksHtml += `<a href="/status?open=${rvSource}:${tender.id}" class="td-modal-btn secondary-btn">📝 Review</a>`;
+        linksHtml += `<a href="/status?open=${rvSource}:${tender.id}" class="td-modal-btn secondary-btn">${icon('edit')}Review</a>`;
         linksHtml += `</div>`;
 
         const filesHtml = tender.tender_dir
@@ -839,17 +1117,18 @@ document.addEventListener('DOMContentLoaded', () => {
     function _tenderRow(t) {
         const rvStatus = t.review_status || 'pending';
         const rvSource = t.source === 'taiq' ? 'taiq' : 'manual';
-        const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
+        const rvIcon   = icon(rvStatus === 'approved' ? 'check'
+                            : rvStatus === 'rejected' ? 'cross' : 'hourglass');
         const taiqTag  = t.source === 'taiq'
-            ? '<span class="taiq-source-tag">🤖 TAiQ</span>' : '';
+            ? `<span class="taiq-source-tag">${icon('bot')}TAiQ</span>` : '';
 
         const menuItems = [
-            `<button type="button" class="card-inspect-btn" data-id="${t.id}">🔍 Inspect</button>`,
-            t.url ? `<a href="${t.url}" target="_blank" rel="noopener">View source ↗</a>` : '',
+            `<button type="button" class="card-inspect-btn" data-id="${t.id}">${icon('search')}Inspect</button>`,
+            t.url ? `<a href="${t.url}" target="_blank" rel="noopener">${icon('link')}View source</a>` : '',
             t.tender_dir
-                ? `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken())}" download>⬇ Download all files</a>`
+                ? `<a href="/download/tender?path=${encodeURIComponent(t.tender_dir)}&token=${encodeURIComponent(getToken())}" download>${icon('download')}Download all files</a>`
                 : '',
-            `<a href="/status?open=${rvSource}:${t.id}">📝 Review</a>`,
+            `<a href="/status?open=${rvSource}:${t.id}">${icon('edit')}Review</a>`,
         ].filter(Boolean).join('');
 
         return `

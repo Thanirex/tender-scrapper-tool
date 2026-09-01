@@ -85,12 +85,26 @@ async def get_stats(
 @router.get("/report")
 async def get_report(
     request: Request,
-    days: int = Query(default=3, ge=1, le=14),
+    days: int = Query(default=3, ge=1, le=90),
     current_user: dict = _auth,
 ):
-    """Rolling report cards for the last N days (default 3, newest first)."""
+    """Rolling report cards for the last N days (default 3, newest first).
+
+    The cap is 90 rather than 14 because the same series also feeds the
+    dashboard's Performance Overview chart, which offers a 30-day window.
+    """
     team_id = current_user.get("team_id", "cnk")
     return {"days": _db(request).get_daily_report(days, team_id=team_id)}
+
+
+@router.get("/overview")
+async def get_overview(
+    request: Request,
+    current_user: dict = _auth,
+):
+    """All-time totals for the KPI row — independent of the calendar selection."""
+    team_id = current_user.get("team_id", "cnk")
+    return _label_sites(_db(request).get_overview_totals(team_id), team_id)
 
 
 @router.get("/tenders")

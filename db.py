@@ -1089,6 +1089,53 @@ class TenderDB:
                 })
         return report
 
+    def get_overview_totals(self, team_id: str = None) -> dict:
+        """All-time headline numbers for the dashboard KPI row.
+
+        The KPI row needs figures that do *not* move with the calendar
+        selection — the per-site stat cards used to be labelled "All time"
+        while actually carrying the selected date's counts, which is the
+        contradiction this replaces. Everything here is genuinely all-time.
+        """
+        totals = {"approved": 0, "rejected": 0, "pending": 0}
+        site_map: dict = {}
+
+        with self._connect() as conn:
+            for table in self._REVIEW_SOURCES.values():
+                st_sql = f"""SELECT COALESCE(review_status, 'pending') AS st,
+                                    COUNT(*) AS n
+                             FROM {table}"""
+                st_params: list = []
+                if team_id:
+                    st_sql += " WHERE team_id = ?"
+                    st_params.append(team_id)
+                st_sql += " GROUP BY COALESCE(review_status, 'pending')"
+                for r in conn.execute(st_sql, st_params).fetchall():
+                    totals[r["st"]] = totals.get(r["st"], 0) + r["n"]
+
+                si_sql = f"SELECT LOWER(site) AS site, COUNT(*) AS n FROM {table}"
+                si_params: list = []
+                if team_id:
+                    si_sql += " WHERE team_id = ?"
+                    si_params.append(team_id)
+                si_sql += " GROUP BY LOWER(site)"
+                for r in conn.execute(si_sql, si_params).fetchall():
+                    site = r["site"] or ""
+                    if site:
+                        site_map[site] = site_map.get(site, 0) + r["n"]
+
+        by_site = sorted(
+            ({"site": k, "count": v} for k, v in site_map.items()),
+            key=lambda x: x["count"], reverse=True,
+        )
+        return {
+            "total_tenders":  sum(totals.values()),
+            "pending_review": totals["pending"],
+            "approved":       totals["approved"],
+            "rejected":       totals["rejected"],
+            "by_site":        by_site,
+        }
+
     # ── Activity logging ───────────────────────────────────────────────────────
 
     def log_activity(self, user_id: int, username: str, action: str,
@@ -1579,10 +1626,43 @@ class TenderDB:
             except (ValueError, TypeError):
                 continue
         counts["avg_review_hours"] = round(sum(hours) / len(hours), 1) if hours else None
+
+        # How long the longest-waiting pending tender has sat there. Pending is
+        # the only actionable state on the review page, and a count alone can't
+        # distinguish a queue filled this morning from one three weeks stale.
+        oldest: str = None
+        with self._connect() as conn:
+            for table in self._REVIEW_SOURCES.values():
+                q = f"""SELECT MIN(found_at) AS m FROM {table}
+                        WHERE found_at LIKE ?
+                          AND COALESCE(review_status, 'pending') = 'pending'"""
+                params = [like]
+                if team_id:
+                    q += " AND team_id = ?"
+                    params.append(team_id)
+                row = conn.execute(q, params).fetchone()
+                if row and row["m"] and (oldest is None or row["m"] < oldest):
+                    oldest = row["m"]
+
+        counts["oldest_pending_at"]    = oldest
+        counts["oldest_pending_hours"] = None
+        if oldest:
+            try:
+                delta = (now_ist_naive() - datetime.fromisoformat(oldest)).total_seconds() / 3600
+                counts["oldest_pending_hours"] = round(max(delta, 0), 1)
+            except (ValueError, TypeError):
+                pass
         return counts
 
-    def get_review_months(self, limit: int = 6, team_id: str = None) -> "list[dict]":
-        """Per-month counts for the trend chart, oldest → newest."""
+    def get_review_months(self, limit: int = 6, team_id: str = None,
+                          end_month: str = None) -> "list[dict]":
+        """Per-month counts for the trend chart, oldest → newest.
+
+        `end_month` ('YYYY-MM') anchors the window so it ends at the month the
+        user is looking at rather than at today. Without it, selecting an older
+        month leaves it off its own chart — and leaves the tiles with no
+        previous month to compute a delta against.
+        """
         buckets: dict = {}
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
@@ -1602,7 +1682,10 @@ class TenderDB:
                                  "rejected": 0, "pending": 0}
                     )
                     b[r["st"]] = b.get(r["st"], 0) + r["n"]
-        months = sorted(buckets.values(), key=lambda b: b["month"], reverse=True)[:limit]
+        ordered = sorted(buckets.values(), key=lambda b: b["month"], reverse=True)
+        if end_month:
+            ordered = [b for b in ordered if b["month"] <= end_month]
+        months = ordered[:limit]
         for b in months:
             b["scraped"] = b["approved"] + b["rejected"] + b["pending"]
         return list(reversed(months))
