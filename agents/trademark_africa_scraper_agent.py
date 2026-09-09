@@ -3,6 +3,7 @@ import sys
 import html as html_mod
 import requests
 from pathlib import Path
+from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from paths import DOWNLOADS_DIR
@@ -10,7 +11,9 @@ from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class TradeMarkAfricaScraperAgent:
-    API_URL = "https://trademarkafrica.com/wp-json/wp/v2/procurement"
+    LISTING_URL = "https://trademarkafrica.com/procurement/"
+    USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
     def __init__(self):
         self._cached_posts = None
@@ -26,13 +29,15 @@ class TradeMarkAfricaScraperAgent:
         log(f"🔍 [TradeMark Africa] Scanning for '{keyword}'...")
 
         try:
+            # The listing is keyword-independent — keywords are matched against
+            # it below — so it is fetched once and reused for every keyword.
             if self._cached_posts is not None:
                 posts = self._cached_posts
-                log(f"   ↳ {len(posts)} post(s) (using cached listing)")
+                log(f"   ↳ {len(posts)} tender(s) (using cached listing)")
             else:
-                posts = self._fetch_posts(keyword, log)
+                posts = self._fetch_posts(log)
                 self._cached_posts = posts
-                log(f"   ↳ {len(posts)} post(s) returned by API")
+                log(f"   ↳ {len(posts)} tender(s) on the procurement page")
 
             n_title_miss = n_neg = n_dup = n_opened = 0
             for post in posts:
@@ -67,7 +72,7 @@ class TradeMarkAfricaScraperAgent:
                         on_result_ready(rec)
 
             log(
-                f"   📊 '{keyword}' summary on TradeMark Africa: {len(posts)} post(s) from the API → "
+                f"   📊 '{keyword}' summary on TradeMark Africa: {len(posts)} tender(s) listed → "
                 f"{n_title_miss} without the keyword in the title, "
                 f"{n_neg} blocked by negative keywords, {n_dup} already collected, "
                 f"{n_opened} processed, {len(results)} saved"
@@ -78,35 +83,67 @@ class TradeMarkAfricaScraperAgent:
 
         return results
 
-    def _fetch_posts(self, keyword: str, log) -> list:
-        """Fetch ALL matching posts, walking the WP REST API's pages."""
+    def _fetch_posts(self, log) -> list:
+        """Scrape the procurement page for its full tender list.
+
+        The WP REST route this used to call (/wp/v2/procurement) now answers
+        404 — TradeMark rebuilt the page in Elementor and the `procurement`
+        post type is no longer registered at all, which is why every run
+        reported zero posts. The tenders are rendered into the page as an
+        Elementor post grid whose entries carry ordinary detail-page URLs.
+
+        Returns dicts shaped like WP REST posts so _process_post is unchanged.
+        """
+        listings: list = []
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page(user_agent=self.USER_AGENT)
+                try:
+                    page.goto(self.LISTING_URL, wait_until="domcontentloaded", timeout=60000)
+                    page.wait_for_timeout(6000)
+                    listings = page.eval_on_selector_all(
+                        ".uc_post_title a[href]",
+                        """els => {
+                            const seen = new Set();
+                            const out = [];
+                            els.forEach(a => {
+                                const href = a.href;
+                                const title = (a.textContent || '').trim();
+                                if (!href || !title || seen.has(href)) return;
+                                seen.add(href);
+                                out.push({ title, url: href });
+                            });
+                            return out;
+                        }"""
+                    )
+                finally:
+                    browser.close()
+        except Exception as e:
+            log(f"   ⚠️ Could not load the procurement listing: {e}")
+            return []
+
+        if not listings:
+            return []
+
+        # Pull each detail page so document links and body text are available
+        # to _process_post exactly as the REST payload used to provide them.
         posts: list = []
-        page = 1
-        while True:
+        for item in listings:
+            html = ""
             try:
-                resp = requests.get(
-                    self.API_URL,
-                    params={
-                        "search":   keyword,
-                        "per_page": 100,   # WP REST maximum per request
-                        "page":     page,
-                        "_fields":  "id,title,link,date,excerpt,content",
-                    },
-                    timeout=30,
-                )
-                if resp.status_code == 400:
-                    break   # WP returns 400 for pages past the last one
-                resp.raise_for_status()
-                batch = resp.json()
+                r = requests.get(item["url"], timeout=45,
+                                 headers={"User-Agent": self.USER_AGENT})
+                r.raise_for_status()
+                html = r.text
             except Exception as e:
-                log(f"   ⚠️ API error: {e}")
-                break
-            if not isinstance(batch, list) or not batch:
-                break
-            posts.extend(batch)
-            if len(batch) < 100:
-                break
-            page += 1
+                log(f"   ⚠️ Could not open '{item['title'][:50]}': {e}")
+            posts.append({
+                "title":   {"rendered": item["title"]},
+                "link":    item["url"],
+                "content": {"rendered": html},
+                "excerpt": {"rendered": ""},
+            })
         return posts
 
     def _process_post(self, post: dict, keyword: str, base_dir: Path, log, db=None, team_id: str = "cnk") -> dict | None:

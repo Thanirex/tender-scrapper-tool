@@ -10,8 +10,7 @@
         "skip_date_filter": true
     },
     "ungm": {
-        "url": "https://www.ungm.org",
-        "requires_auth": true,
+        "url": "https://www.ungm.org/Public/Notice",
         "display_name": "UNGM (UN Global Marketplace)"
     },
     "nasscom": {
@@ -101,7 +100,7 @@
         "skip_date_filter": true
     },
     "gatsbyafrica": {
-        "url": "https://gatsbyafrica.org.uk/vacancies-tenders/",
+        "url": "https://www.gatsbyafrica.org.uk/workwithus/tenders-and-consulting-2/",
         "scraper_type": "gatsbyafrica",
         "display_name": "Gatsby Africa Tenders",
         "skip_date_filter": true

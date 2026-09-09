@@ -133,12 +133,10 @@ class RunStatsCollector:
                 self.current_keyword = m.group(1)
                 return
 
-            # UNGM has no 📊 summary line; its per-keyword rollup is
-            # "... tenders processed for '<kw>'".
-            if "tenders processed for" in msg:
-                self._flush_block()
-                data["keywords_done"] += 1
-                return
+            # NB: UNGM emits BOTH a 📊 summary line and its own
+            # "... tenders processed for '<kw>'" rollup. Counting the rollup
+            # here as well double-counted every UNGM keyword, so the summary
+            # line above is the single place keywords_done is incremented.
 
             reason = self._classify(msg)
             if reason:

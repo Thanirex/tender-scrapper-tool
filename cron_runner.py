@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import logging
 import threading
 from datetime import datetime
@@ -13,11 +14,26 @@ logger = logging.getLogger("taiq.cron")
 _scheduler      = None
 _db             = None
 _stop_event     = threading.Event()
-# Guards the module-level run state below — only one daily job at a time.
-_run_lock       = threading.Lock()
+# Short-held guard around claiming/releasing ownership of the run state below.
+# It is never held while a scrape runs, so a wedged worker cannot block it.
+_claim_lock     = threading.Lock()
 _current_run_id: "int | None" = None
 _current_team_id: "str | None" = None
 _stats          = None   # run_stats.RunStatsCollector for the active run
+
+# ── Stall watchdog ─────────────────────────────────────────────────────────
+# A scrape can wedge inside a third-party call (a pathological PDF, a hung
+# browser, an unresponsive host). Python cannot kill the thread doing it, so
+# instead the run is given a generation number: if it stops reporting progress
+# for _STALL_SECONDS the run is declared dead, its slot is released so the next
+# run can start, and any output the zombie thread produces later is dropped
+# because its generation no longer matches. Recovering no longer needs a
+# container restart.
+_run_generation  = 0
+_active_gen: "int | None" = None      # generation that currently owns run state
+_last_progress   = 0.0                # time.monotonic() of the last log line
+_STALL_SECONDS   = 25 * 60
+_thread_state    = threading.local()  # carries the owning generation per thread
 
 # ── Per-run log buffer ─────────────────────────────────────────────────────
 _log_buffer:    list = []
@@ -44,7 +60,49 @@ def _check_stop():
         raise _StopRequested("Stop requested by superadmin")
 
 
+def _reap_if_stalled() -> "int | None":
+    """Release the run slot if the owning run has gone silent.
+
+    Returns the reaped run id, or None. Safe to call from any thread: it only
+    touches bookkeeping, never the wedged worker.
+    """
+    global _current_run_id, _current_team_id, _stats, _active_gen
+
+    with _claim_lock:
+        if _active_gen is None or _current_run_id is None:
+            return None
+        if time.monotonic() - _last_progress < _STALL_SECONDS:
+            return None
+        stuck_id, stuck_team = _current_run_id, _current_team_id
+        # Bump past the stuck generation so its thread can no longer write.
+        _active_gen      = None
+        _current_run_id  = None
+        _current_team_id = None
+        _stats           = None
+
+    mins = int((time.monotonic() - _last_progress) // 60)
+    logger.error(
+        f"[TAiQ Cron] Run #{stuck_id} ({stuck_team}) produced no output for "
+        f"{mins} minutes — declaring it stalled and releasing the run slot."
+    )
+    try:
+        _db.update_cron_run(
+            stuck_id, status="failed",
+            finished_at=now_ist_naive().isoformat(timespec="seconds"),
+            current_keyword="",
+            error_msg=f"Stalled — no progress for {mins} minutes; run slot released.",
+        )
+    except Exception as e:
+        logger.error(f"[TAiQ Cron] Could not mark stalled run #{stuck_id} failed: {e}")
+    _stop_event.set()   # ask the zombie to unwind if it ever regains control
+    return stuck_id
+
+
 def get_current_run_id() -> "int | None":
+    # Checked on the API's "is a run in progress?" path, so a stalled run
+    # heals itself the next time anyone looks instead of blocking every
+    # future run until the container is rebuilt.
+    _reap_if_stalled()
     return _current_run_id
 
 
@@ -59,7 +117,18 @@ def get_log_buffer() -> list:
 
 def _write_log(msg: str):
     """Append a timestamped line to the in-memory buffer AND the run log file."""
-    global _log_buffer
+    global _log_buffer, _last_progress
+
+    # A run that was declared stalled may still be alive inside a blocked
+    # call. If it wakes up it must not write into the log, buffer or stats of
+    # whichever run owns them now.
+    gen = getattr(_thread_state, "gen", None)
+    if gen is not None and gen != _active_gen:
+        return
+
+    # Any log line counts as progress for the stall watchdog.
+    _last_progress = time.monotonic()
+
     ts   = now_ist_naive().strftime("%H:%M:%S")
     line = f"[{ts}] {msg}"
     with _log_lock:
@@ -155,25 +224,44 @@ def _load_all_keywords(team_id: str = "cnk") -> list:
 
 def run_daily_job(team_id: str = "cnk"):
     """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team."""
+    global _run_generation, _active_gen, _last_progress
+
     # Only one run may own the module-level state (_current_run_id, _stats,
     # _log_buffer, _log_file_path, _stop_event) at a time.  Without this,
     # a second run entering here calls _stop_event.clear() and _reset_log(),
     # which truncates the first run's log file and steals its stats collector.
-    if not _run_lock.acquire(blocking=False):
-        logger.warning(
-            f"[TAiQ Cron] Run for team {team_id} skipped — "
-            f"run #{_current_run_id} ({_current_team_id}) is still in progress."
-        )
-        return
+    #
+    # Ownership is a generation number rather than a held lock: a lock owned by
+    # a wedged worker could never be reclaimed, which is what used to force a
+    # container rebuild.
+    _reap_if_stalled()
 
+    with _claim_lock:
+        if _active_gen is not None:
+            logger.warning(
+                f"[TAiQ Cron] Run for team {team_id} skipped — "
+                f"run #{_current_run_id} ({_current_team_id}) is still in progress."
+            )
+            return
+        _run_generation += 1
+        gen = _run_generation
+        _active_gen   = gen
+        _last_progress = time.monotonic()
+
+    _thread_state.gen = gen
     try:
         _run_daily_job_locked(team_id)
     finally:
-        _run_lock.release()
+        with _claim_lock:
+            # Only release if this run still owns the slot — if the watchdog
+            # already reaped it, a newer run may hold it now.
+            if _active_gen == gen:
+                _active_gen = None
+        _thread_state.gen = None
 
 
 def _run_daily_job_locked(team_id: str):
-    """Body of run_daily_job — callers must hold _run_lock."""
+    """Body of run_daily_job — callers must own the run slot (see _active_gen)."""
     global _current_run_id, _current_team_id, _stats
 
     from paths import DOWNLOADS_DIR, APP_DIR
@@ -186,30 +274,29 @@ def _run_daily_job_locked(team_id: str):
 
     _stop_event.clear()
 
-    email    = os.getenv("UNGM_EMAIL", "").strip()
-    password = os.getenv("UNGM_PASSWORD", "")
-
-    # UNGM moved to one-time login codes, so headless login can fail or the
-    # credentials may be pulled from .env entirely.  That must NOT abort the
-    # whole run — every other site still has to be scraped.
-    ungm_enabled = bool(email and password)
-
     keywords = _load_all_keywords(team_id)
     if not keywords:
         logger.error(f"[TAiQ Cron] No keywords found for team {team_id} — job aborted.")
         return
 
-    # Discover standard (non-auth) sites from team sites_config.json
+    # Discover the sites to scrape from the team's sites_config.json
     standard_sites: list = []
+    sites_cfg: dict = {}
     cfg_file = APP_DIR / "configs" / "teams" / team_id / "sites_config.json"
     if not cfg_file.exists():
         cfg_file = APP_DIR / "sites_config.json"
     try:
         with open(cfg_file, "r") as f:
             sites_cfg = json.load(f)
-        standard_sites = [k for k, v in sites_cfg.items() if not v.get("requires_auth")]
+        # UNGM has its own agent and its own phase, so it is never dispatched
+        # through the standard-site loop.
+        standard_sites = [k for k in sites_cfg if k != "ungm"]
     except Exception as cfg_err:
         logger.warning(f"[TAiQ Cron] Could not load sites_config for team {team_id}: {cfg_err}")
+
+    # UNGM's public notices need no account: the agent reads /Public/Notice
+    # anonymously, so the run no longer depends on UNGM_EMAIL/UNGM_PASSWORD.
+    ungm_enabled = "ungm" in sites_cfg
 
     if not ungm_enabled and not standard_sites:
         logger.error(f"[TAiQ Cron] No scrapable sites for team {team_id} — job aborted.")
@@ -277,10 +364,7 @@ def _run_daily_job_locked(team_id: str):
         if ungm_enabled:
             _write_log(f"🌐 Phase 1 / {num_sites} — UNGM ({len(keywords)} keywords)")
         else:
-            _write_log(
-                "⏭️ Skipping UNGM — UNGM_EMAIL/UNGM_PASSWORD not set. "
-                "All other sites will still be scraped."
-            )
+            _write_log("⏭️ Skipping UNGM — not in this team's sites_config.json.")
 
         def on_ungm_tender_ready(res: dict):
             nonlocal total_tenders
@@ -333,7 +417,8 @@ def _run_daily_job_locked(team_id: str):
                 )
 
             fields = summarizer.summarize_level1(
-                combined, log_callback=_write_log, max_chars=_MAX_COMBINED_CHARS
+                combined, log_callback=_write_log, max_chars=_MAX_COMBINED_CHARS,
+                should_stop=_stop_event.is_set,
             )
             if not fields:
                 _write_log(f"  ⚠️ Summarizer returned no fields for: {title[:55]}")
@@ -375,7 +460,7 @@ def _run_daily_job_locked(team_id: str):
         if ungm_enabled:
             ungm_agent = UNGMScraperAgent()
             _run_step_safely("UNGM", lambda: ungm_agent.scrape(
-                email, password, keywords, str(ungm_run_dir),
+                keywords, str(ungm_run_dir),
                 headless=True, log_callback=_progress_log,
                 on_tender_ready=on_ungm_tender_ready, db=proxy,
                 team_id=team_id,
@@ -464,7 +549,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -536,7 +622,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -595,7 +682,8 @@ def _run_daily_job_locked(team_id: str):
                                 text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -667,7 +755,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -739,7 +828,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -811,7 +901,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -883,7 +974,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -955,7 +1047,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1027,7 +1120,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1099,7 +1193,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1158,7 +1253,8 @@ def _run_daily_job_locked(team_id: str):
                                 text_parts.append(f"=== PAGE CONTENT ===\n{page_text}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1230,7 +1326,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1302,7 +1399,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1374,7 +1472,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1446,7 +1545,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1518,7 +1618,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1590,7 +1691,8 @@ def _run_daily_job_locked(team_id: str):
                                     _write_log(f"  ⚠️ read_file error: {fe}")
 
                             combined = "\n\n".join(text_parts)
-                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log)
+                            fields   = summarizer.summarize_level1(combined, log_callback=_write_log,
+                                                                     should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1644,7 +1746,9 @@ def _run_daily_job_locked(team_id: str):
                             title = res.get("title", "Unknown")
                             _write_log(f"  📊 Summarising: {title[:70]}")
 
-                            fields = summarizer.summarize_level1(res.get("content", ""))
+                            fields = summarizer.summarize_level1(
+                                res.get("content", ""), log_callback=_write_log,
+                                should_stop=_stop_event.is_set)
 
                             tender_dir_abs = Path(res.get("tender_dir", ""))
                             safe_title     = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
@@ -1754,11 +1858,20 @@ def _run_daily_job_locked(team_id: str):
         )
 
     finally:
-        _current_run_id  = None
-        _current_team_id = None
-        _stats           = None
-        _stop_event.clear()
-        _clear_log()
+        # If the watchdog already reaped this run, a newer run may own the
+        # module state — a late-waking zombie must not clear it, and must not
+        # clear a stop that was requested for someone else.
+        if getattr(_thread_state, "gen", None) == _active_gen:
+            _current_run_id  = None
+            _current_team_id = None
+            _stats           = None
+            _stop_event.clear()
+            _clear_log()
+        else:
+            logger.warning(
+                f"[TAiQ Cron] Run #{run_id} finished after being declared "
+                f"stalled — its results were discarded."
+            )
 
 
 # ── Startup catch-up ───────────────────────────────────────────────────────

@@ -3,8 +3,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const siteSelect       = document.getElementById('site-select');
     const categorySelect   = document.getElementById('category-select');
     const keywordsInput    = document.getElementById('keywords-input');
-    const ungmEmail        = document.getElementById('ungm-email');
-    const ungmPassword     = document.getElementById('ungm-password');
     const browserToggleRow = document.getElementById('browser-toggle-row');
     const ungmShowBrowser  = document.getElementById('ungm-show-browser');
     const btnStart         = document.getElementById('btn-start');
@@ -138,38 +136,32 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const step2Card      = document.getElementById('step-card-2');
     const step2NoAuth    = document.getElementById('step2-no-auth');
-    const step2AuthFields = document.getElementById('step2-auth-fields');
     const step2SiteName  = document.getElementById('step2-site-name');
     const step2LockIcon  = document.getElementById('step2-lock-icon');
     const step2Num       = document.getElementById('step2-num');
 
-    const SITES_REQUIRING_AUTH = new Set(['ungm']);
-
+    // No site needs credentials any more — UNGM is read from its public
+    // /Public/Notice listing — so step 2 is always the "nothing to do" state.
     function updateStep2(site) {
-        const needsAuth = SITES_REQUIRING_AUTH.has(site);
         const siteLabel = site
-            ? (site === 'ungm' ? 'UNGM (UN Global Marketplace)' : site.toUpperCase())
+            ? (siteSelect.selectedOptions[0]?.textContent || site.toUpperCase())
             : '—';
 
-        if (needsAuth) {
-            step2Card.classList.remove('step-card-locked');
-            step2NoAuth.classList.add('hidden');
-            step2AuthFields.classList.remove('hidden');
-            if (step2LockIcon) step2LockIcon.textContent = '🔓';
-            if (step2Num) step2Num.classList.remove('step-num-locked');
-        } else {
-            step2Card.classList.add('step-card-locked');
-            step2AuthFields.classList.add('hidden');
-            step2NoAuth.classList.remove('hidden');
-            if (step2SiteName) step2SiteName.textContent = siteLabel;
-            if (step2LockIcon) step2LockIcon.textContent = '🔒';
-            if (step2Num) step2Num.classList.add('step-num-locked');
-        }
+        step2Card.classList.add('step-card-locked');
+        step2NoAuth.classList.remove('hidden');
+        if (step2SiteName) step2SiteName.textContent = siteLabel;
+        if (step2LockIcon) step2LockIcon.textContent = '🔒';
+        if (step2Num) step2Num.classList.add('step-num-locked');
 
         if (browserToggleRow) {
             browserToggleRow.classList.toggle('hidden', site !== 'ungm');
         }
     }
+
+    // Step 2 used to be refreshed only once, when the site list first loaded,
+    // so its "Scraping: <site>" label stayed on whichever site happened to be
+    // first no matter what you picked.
+    siteSelect.addEventListener('change', () => updateStep2(siteSelect.value));
 
     const activeUser = getUser();
     const currentTeamId = (activeUser && activeUser.team_id) ? activeUser.team_id.toLowerCase() : 'cnk';
@@ -442,15 +434,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
+        // UNGM needs no credentials now; only the live-browser preference
+        // still travels with the request.
         let credentials = {};
         if (site === 'ungm') {
-            const email = ungmEmail.value.trim();
-            const password = ungmPassword.value;
-            if (!email || !password) {
-                alert('Please enter your UNGM email and password in Step 2.');
-                return;
-            }
-            credentials = { email, password, show_browser: ungmShowBrowser.checked };
+            credentials = { show_browser: ungmShowBrowser.checked };
         }
 
         // Reset run state

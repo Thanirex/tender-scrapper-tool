@@ -6,25 +6,48 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from date_utils import is_within_cutoff_ist, extract_date_from_text, get_max_age_hours, is_date_or_deadline_valid
+from date_utils import (is_within_cutoff_ist, extract_date_from_text, get_max_age_hours,
+                        is_date_or_deadline_valid, now_ist_naive)
 from keyword_utils import keyword_matches, find_negative_keyword
 
 class UNGMScraperAgent:
-    BASE_URL = "https://www.ungm.org"
-    LOGIN_URL = "https://www.ungm.org/Login"
-    NOTICES_URL = "https://www.ungm.org/Public/Notice"
+    """Scrapes UNGM's public procurement notices.
 
-    def scrape(self, email: str, password: str, keywords: list, run_dir: str,
+    UNGM requires no account to read /Public/Notice: the listing is served by a
+    JSON-in / HTML-out endpoint (SEARCH_URL) that answers anonymously, and each
+    notice detail page is public. The agent therefore carries no credentials.
+
+    The listing is fetched from SEARCH_URL directly rather than by driving the
+    filter form. UNGM renders results as ARIA grid divs (`data-noticeid`), not a
+    real <table>, so the old `table#tblNotices tbody tr` selector matched
+    nothing and every run reported zero notices.
+    """
+
+    BASE_URL = "https://www.ungm.org"
+    NOTICES_URL = "https://www.ungm.org/Public/Notice"
+    SEARCH_URL = "https://www.ungm.org/Public/Notice/Search"
+
+    # Rows come back as <div role="row" ... data-noticeid="311446" ...>
+    _NOTICE_ID_RE = re.compile(r'data-noticeid="(\d+)"')
+
+    # Notices requested per keyword. UNGM caps a page at 15 server-side and
+    # ignores anything larger, so this matches what the endpoint will actually
+    # return. Results are sorted by soonest deadline, so the 15 are the most
+    # urgent open opportunities — the same page the UI itself shows.
+    PAGE_SIZE = 15
+
+    def scrape(self, keywords: list, run_dir: str,
                headless: bool = True, log_callback=None, on_tender_ready=None,
                db=None, team_id: str = "cnk", max_age_hours: int | None = None) -> list:
+        """Per-keyword public search → extract → download.
+
+        on_tender_ready(rec): optional callback fired immediately after each
+        tender is downloaded — use it to summarise and save while the next
+        download runs. Returns list of all result dicts.
+        """
         if max_age_hours is None:
             max_age_hours = get_max_age_hours(team_id)
-        """
-        Full UNGM flow: login → per-keyword search → extract → download.
-        on_tender_ready(rec): optional callback fired immediately after each tender
-        is downloaded — use it to summarise and save while the next download runs.
-        Returns list of all result dicts.
-        """
+
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -47,8 +70,9 @@ class UNGMScraperAgent:
             ctx = browser.new_context(accept_downloads=True)
             page = ctx.new_page()
             try:
-                if not self._login(page, email, password, log):
-                    return []
+                # One visit to the public listing so the context picks up the
+                # cookies UNGM's search endpoint expects.
+                self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle")
 
                 for keyword in keywords:
                     log(f"▶️ Keyword: '{keyword}'")
@@ -79,122 +103,90 @@ class UNGMScraperAgent:
             log(f"❌ Navigation failed ({url}): {e}")
             return False
 
-    def _login(self, page, email: str, password: str, log) -> bool:
-        log("🔐 Opening UNGM login page...")
-        if not self._goto(page, self.LOGIN_URL, log, wait_for="input#UserName"):
-            return False
+    def _search_payload(self, keyword: str) -> dict:
+        """Mirror of the payload UNGM's own filter form posts.
+
+        IsActive + DeadlineFrom=today keep the result set to opportunities that
+        are still open, which is the filter the UI calls "Active only".
+        """
+        today = now_ist_naive().strftime("%d-%b-%Y")
+        return {
+            "PageIndex": 0,
+            "PageSize": self.PAGE_SIZE,
+            "Title": keyword,
+            "Description": "",
+            "Reference": "",
+            "PublishedFrom": "",
+            "PublishedTo": today,
+            "DeadlineFrom": today,
+            "DeadlineTo": "",
+            "Countries": [],
+            "Agencies": [],
+            "UNSPSCs": [],
+            "NoticeTypes": [],
+            "SortField": "Deadline",
+            "SortAscending": True,
+            "isPicker": False,
+            "IsSustainable": False,
+            "IsActive": True,
+            "NoticeDisplayType": None,
+            "NoticeSearchTotalLabelId": "noticeSearchTotal",
+            "TypeOfCompetitions": [],
+        }
+
+    def _fetch_notice_ids(self, ctx, keyword: str, log) -> list:
+        """POST the public search endpoint and pull notice ids out of the HTML.
+
+        Going straight to the endpoint avoids driving UNGM's AJAX filter form,
+        which needed a keystroke-by-keystroke dance and a settle wait per
+        keyword. The response is an HTML fragment of ARIA grid rows.
+        """
+        try:
+            resp = ctx.request.post(
+                self.SEARCH_URL,
+                data=self._search_payload(keyword),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                    "Referer": self.NOTICES_URL,
+                },
+                timeout=45000,
+            )
+        except Exception as e:
+            log(f"   ❌ Search request failed: {e}")
+            return []
+
+        if not resp.ok:
+            log(f"   ❌ Search returned HTTP {resp.status}")
+            return []
 
         try:
-            email_input = page.locator("input#UserName")
-            email_input.wait_for(state="visible", timeout=15000)
-            email_input.fill(email)
-            page.locator("input#Password").fill(password)
-            page.locator("button:has-text('Log in')").click()
-            # Wait for redirect away from /Login rather than sleeping a fixed time
-            try:
-                page.wait_for_url(lambda u: "/Login" not in u, timeout=10000)
-            except Exception:
-                pass
+            html = resp.text()
         except Exception as e:
-            log(f"❌ Login form error: {e}")
-            return False
+            log(f"   ❌ Could not read search response: {e}")
+            return []
 
-        if "/Login" in page.url:
-            log("❌ Login failed — check credentials.")
-            return False
-
-        log("✅ Logged in.")
-        return True
+        ids, seen = [], set()
+        for nid in self._NOTICE_ID_RE.findall(html):
+            if nid not in seen:
+                seen.add(nid)
+                ids.append(nid)
+        return ids
 
     def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None, max_age_hours: int = 24, team_id: str = "cnk") -> list:
-        if not self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle"):
-            return []
-
-        # Order matters: check Active FIRST and let its AJAX settle,
-        # THEN type the keyword, THEN click Search.
-        # Checking Active fires its own AJAX — if done after typing it overwrites the keyword.
-        try:
-            cb = page.locator("input#chkIsActive")
-            cb.wait_for(state="visible", timeout=5000)
-            if not cb.is_checked():
-                # Use expect_response so we exit as soon as the AJAX call returns,
-                # instead of waiting for networkidle which UNGM never reaches.
-                try:
-                    with page.expect_response(
-                        lambda r: "/Public/Notice" in r.url and r.status == 200,
-                        timeout=6000
-                    ):
-                        cb.check()
-                except Exception:
-                    page.wait_for_timeout(1000)
-            log("   ✓ Active-only filter enabled")
-        except Exception as e:
-            log(f"   ℹ️ Active-only checkbox not found: {e}")
-
-        try:
-            title_input = page.locator("input#txtNoticeFilterTitle")
-            title_input.wait_for(state="visible", timeout=10000)
-            title_input.click()
-            title_input.press("Control+a")
-            # press_sequentially fires real keyboard events — fill() bypasses them on AJAX forms
-            title_input.press_sequentially(keyword, delay=20)
-        except Exception as e:
-            log(f"   ❌ Could not fill keyword: {e}")
-            return []
-
-        try:
-            # Wrap the click in expect_response so we exit as soon as the search
-            # AJAX returns — avoids the 8-second fallback wait_for_timeout.
-            try:
-                with page.expect_response(
-                    lambda r: "/Public/Notice" in r.url and r.status == 200,
-                    timeout=12000
-                ):
-                    page.locator("button#lnkSearch").click()
-            except Exception:
-                page.wait_for_timeout(2000)
-            log(f"   🔍 Search submitted for '{keyword}'")
-        except Exception as e:
-            log(f"   ❌ Search submission failed: {e}")
-            return []
-
-        # If the empty-results notice is visible, the search found nothing — stop here
-        try:
-            if page.locator("#noticesEmpty").is_visible():
-                log(f"   ↳ No results for '{keyword}'")
-                return []
-        except Exception:
-            pass
-
-        try:
-            total_label = page.locator("#noticeSearchTotal").text_content().strip()
-            log(f"   ↳ Total matching notices reported: {total_label}")
-        except Exception:
-            pass
-
-        # Extract notice links from the current page.
-        # hrefs match /Public/Notice/123456
-        hrefs = []
-        try:
-            # Wait for table rows to arrive
-            page.locator("table#tblNotices tbody tr").first.wait_for(state="visible", timeout=10000)
-            raw_hrefs = page.eval_on_selector_all(
-                "table#tblNotices tbody tr a[href*='/Public/Notice/']",
-                "els => els.map(e => e.getAttribute('href')).filter(h => h)"
+        notice_ids = self._fetch_notice_ids(ctx, keyword, log)
+        if not notice_ids:
+            log(f"   ↳ No results for '{keyword}'")
+            log(
+                f"   📊 '{keyword}' summary on UNGM: 0 notice(s) opened → "
+                f"0 without the keyword in the title, 0 blocked by negative keywords, "
+                f"0 older than {max_age_hours}h, 0 missing a publish date, "
+                f"0 already collected, 0 failed to load, 0 saved"
             )
-            seen = set()
-            for h in raw_hrefs:
-                full = self.BASE_URL + h if not h.startswith("http") else h
-                if full not in seen:
-                    seen.add(full)
-                    hrefs.append(full)
-        except Exception as e:
-            log(f"   ⚠️ Could not extract notice rows: {e}")
             return []
 
-        if not hrefs:
-            log(f"   ↳ No notice links extracted for '{keyword}'")
-            return []
+        hrefs = [f"{self.BASE_URL}/Public/Notice/{nid}" for nid in notice_ids]
+        log(f"   ↳ {len(hrefs)} active notice(s) matched '{keyword}'")
 
         log(f"   ↳ Opening {len(hrefs)} tenders")
 
@@ -223,6 +215,43 @@ class UNGMScraperAgent:
         "forbidden", "page not found", "error 500", "bad request",
     }
 
+    # Tender folders are zipped and served to users by /download/tender, so an
+    # executable must never be written into one. UNGM answers some document
+    # links with an empty placeholder carrying an .exe name; whatever the
+    # reason, the extension is refused on the way in rather than trusted.
+    _BLOCKED_EXTS = {
+        ".exe", ".scr", ".bat", ".cmd", ".com", ".pif", ".msi", ".msp",
+        ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh", ".ps1", ".psm1",
+        ".jar", ".dll", ".cpl", ".hta", ".reg", ".lnk", ".app",
+    }
+
+    def _save_download(self, dl, tender_dir: Path, log, fallback: str = "attachment") -> "str | None":
+        """Persist a Playwright download, refusing executables and empty files."""
+        fname = dl.suggested_filename or fallback
+        stem  = Path(fname).stem[:55]
+        ext   = Path(fname).suffix[:10]
+
+        if ext.lower() in self._BLOCKED_EXTS:
+            log(f"      ⛔ Skipped '{fname}' — executable file type is not downloaded")
+            return None
+
+        safe_fname = re.sub(r'[\\/*?:"<>|]', "_", stem) + ext
+        out_path   = tender_dir / safe_fname
+        dl.save_as(str(out_path))
+
+        # UNGM hands back a 0-byte body for documents that need a session.
+        # An empty file is noise in the tender folder, so drop it.
+        try:
+            if out_path.stat().st_size == 0:
+                out_path.unlink()
+                log(f"      ⚠️ '{safe_fname}' came back empty — not saved")
+                return None
+        except OSError:
+            pass
+
+        log(f"      💾 {safe_fname}")
+        return str(out_path)
+
     def _extract_tender(self, page, ctx, url: str, keyword: str, run_dir: str, log, db=None, stats=None, max_age_hours: int = 24, team_id: str = "cnk") -> dict | None:
         """
         Open the notice in a FRESH TAB so the search-results page stays intact.
@@ -250,10 +279,11 @@ class UNGMScraperAgent:
                 log(f"      ❌ Notice page did not render (h1 missing) — skipping")
                 return None
 
-            # Session-expired: UNGM redirects silently to /Login
+            # Public notices never require an account; a redirect to /Login means
+            # this particular notice is restricted, so skip it rather than fail.
             if "/Login" in notice_page.url or "/login" in notice_page.url:
                 _bump("error")
-                log(f"      ⚠️ Session expired — redirected to login. Skipping.")
+                log(f"      ⚠️ Notice is not public — skipping.")
                 return None
 
             # Title
@@ -499,14 +529,11 @@ class UNGMScraperAgent:
                                 download_btn.click()
                             
                             dl = dl_info.value
-                            fname = dl.suggested_filename or "quantum_documents.zip"
-                            stem = Path(fname).stem[:55]
-                            ext  = Path(fname).suffix[:10]
-                            safe_fname = re.sub(r'[\\/*?:"<>|]', "_", stem) + ext
-                            out_path = tender_dir / safe_fname
-                            dl.save_as(str(out_path))
-                            downloaded.append(str(out_path))
-                            log(f"      💾 Quantum Documents downloaded: {safe_fname}")
+                            saved = self._save_download(dl, tender_dir, log,
+                                                        fallback="quantum_documents.zip")
+                            if saved:
+                                downloaded.append(saved)
+                                log(f"      💾 Quantum Documents downloaded: {Path(saved).name}")
                         except Exception as e:
                             log(f"      ⚠️ Error downloading Quantum documents: {e}")
                             
@@ -543,14 +570,9 @@ class UNGMScraperAgent:
                         except Exception:
                             pass
                     dl = dl_info.value
-                    fname = dl.suggested_filename or "attachment"
-                    stem = Path(fname).stem[:55]
-                    ext  = Path(fname).suffix[:10]
-                    safe_fname = re.sub(r'[\\/*?:"<>|]', "_", stem) + ext
-                    out_path = tender_dir / safe_fname
-                    dl.save_as(str(out_path))
-                    downloaded.append(str(out_path))
-                    log(f"      💾 {safe_fname}")
+                    saved = self._save_download(dl, tender_dir, log)
+                    if saved:
+                        downloaded.append(saved)
                 except PlaywrightTimeout:
                     log(f"      ⚠️ Download timed out")
                 except Exception as dl_e:

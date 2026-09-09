@@ -11,8 +11,7 @@
         "skip_date_filter": true
     },
     "ungm": {
-        "url": "https://www.ungm.org",
-        "requires_auth": true,
+        "url": "https://www.ungm.org/Public/Notice",
         "display_name": "UNGM (UN Global Marketplace)"
     },
     "nasscom": {

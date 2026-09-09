@@ -1,9 +1,27 @@
 import os
 import re
+import sys
 import time
 # from groq import Groq
 from google import genai
 from google.genai import types as genai_types
+
+def _safe_print(msg: str):
+    """print() that can never take a scrape down.
+
+    Agent output is streamed to a server console whose encoding we do not
+    control; a character the console cannot encode must not raise out of a
+    logging call.
+    """
+    try:
+        print(msg)
+    except Exception:
+        try:
+            enc = (getattr(sys.stdout, "encoding", None) or "ascii")
+            sys.stdout.write(msg.encode(enc, "replace").decode(enc, "replace") + "\n")
+        except Exception:
+            pass
+
 
 _MAX_CHARS_DEFAULT = 500_000
 # _MODEL = "llama-3.1-8b-instant"   # Groq model
@@ -37,7 +55,13 @@ class SummarizerAgent:
         # ── Gemini client ─────────────────────────────────────────────────────
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key or api_key == "your_gemini_api_key_here":
-            print("⚠️ WARNING: Invalid or missing GEMINI_API_KEY in .env. Falling back to dummy mode.")
+            # Written without emoji and through a guarded writer: this runs
+            # inside the server, and on a Windows console stdout is cp1252, so
+            # printing a non-encodable character raised UnicodeEncodeError and
+            # took the whole scrape down with it — but only once a run actually
+            # found a tender to summarise.
+            _safe_print("WARNING: Invalid or missing GEMINI_API_KEY in .env. "
+                        "Falling back to dummy mode.")
             self.client = None
         else:
             # timeout is in milliseconds — without it a hung Gemini call
@@ -70,8 +94,13 @@ class SummarizerAgent:
         raw = self._call_api(system, prompt, log, error_return="Error generating summary.")
         return raw
 
-    def summarize_level1(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT):
-        """Extract all Level 1 template fields from tender content. Returns a dict."""
+    def summarize_level1(self, text, log_callback=None, max_chars=_MAX_CHARS_DEFAULT,
+                         should_stop=None):
+        """Extract all Level 1 template fields from tender content. Returns a dict.
+
+        `should_stop` lets a long rate-limit backoff be abandoned as soon as the
+        caller asks the run to stop.
+        """
         log = self._make_logger(log_callback)
 
         if not self._has_content(text):
@@ -91,7 +120,8 @@ class SummarizerAgent:
             "Output ONLY the labeled field lines — no headers, no explanations, no blank lines."
         )
         prompt = self._build_level1_prompt(snippet)
-        raw = self._call_api(system, prompt, log, error_return=None)
+        raw = self._call_api(system, prompt, log, error_return=None,
+                             should_stop=should_stop)
         if raw is None:
             return {}
         return self._parse_level1_fields(raw)
@@ -107,13 +137,38 @@ class SummarizerAgent:
     def _has_content(text) -> bool:
         return bool(text and len(text.strip()) >= 20)
 
-    def _call_api(self, system: str, prompt: str, log, error_return):
+    @staticmethod
+    def _interruptible_sleep(seconds: float, should_stop) -> bool:
+        """Sleep in slices so a stop request is noticed promptly.
+
+        The rate-limit backoff used to be a single time.sleep(65) — during it
+        the daily run ignored Stop entirely, which is a large part of why Stop
+        felt unresponsive on a rate-limited run.  Returns True if it was cut
+        short by a stop request.
+        """
+        if should_stop is None:
+            time.sleep(seconds)
+            return False
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if should_stop():
+                return True
+            time.sleep(min(0.5, deadline - time.monotonic()))
+        return False
+
+    def _call_api(self, system: str, prompt: str, log, error_return, should_stop=None):
         """
         Call Gemini with retry on rate-limit (HTTP 429 / RESOURCE_EXHAUSTED).
         Returns the stripped response string, or error_return on failure.
+
+        `should_stop` is an optional predicate; when it turns true the retry
+        loop gives up instead of waiting out the remaining backoff.
         """
         # ── Gemini call ───────────────────────────────────────────────────────
         for attempt in range(_MAX_RETRIES):
+            if should_stop is not None and should_stop():
+                log("⏹ Stop requested — abandoning this summary.")
+                return error_return
             try:
                 response = self.client.models.generate_content(
                     model=_MODEL,
@@ -139,7 +194,9 @@ class SummarizerAgent:
                 if is_rate_limit and attempt < _MAX_RETRIES - 1:
                     wait_s = _RATE_LIMIT_BACKOFF_S * (attempt + 1)
                     log(f"⏳ Gemini rate limit hit — waiting {wait_s}s before retry ({attempt + 2}/{_MAX_RETRIES})...")
-                    time.sleep(wait_s)
+                    if self._interruptible_sleep(wait_s, should_stop):
+                        log("⏹ Stop requested during backoff — abandoning this summary.")
+                        return error_return
                     continue
                 log(f"❌ Gemini Error ({type(e).__name__}): {e}")
                 return error_return

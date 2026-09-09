@@ -1700,17 +1700,13 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
     from agents.file_reader import read_file
     from agents.excel_writer import write_level1_report
 
-    email       = credentials.get("email", "").strip()
-    password    = credentials.get("password", "")
+    # UNGM's public notices need no account, so `credentials` now only carries
+    # the browser-visibility preference.
     show_browser = credentials.get("show_browser", False)
 
     if show_browser and platform.system() == "Linux" and not os.getenv("DISPLAY"):
         show_browser = False
         log_cb("ℹ️ No display server — running headless.")
-
-    if not email or not password:
-        log_cb("❌ UNGM email and password are required.")
-        return None
 
     timestamp = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir = DOWNLOADS_DIR / "ungm" / timestamp
@@ -1785,7 +1781,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
         log_cb("👁️ Live browser mode enabled.")
 
     agent = UNGMScraperAgent()
-    agent.scrape(email, password, keywords, str(run_dir),
+    agent.scrape(keywords, str(run_dir),
                  headless=not show_browser, log_callback=log_cb,
                  on_tender_ready=on_tender_ready, db=_db, team_id=team_id)
 

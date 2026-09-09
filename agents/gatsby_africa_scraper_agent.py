@@ -11,8 +11,11 @@ from keyword_utils import keyword_matches, find_negative_keyword
 
 
 class GatsbyAfricaScraperAgent:
-    BASE_URL    = "https://gatsbyafrica.org.uk"
-    LISTING_URL = "https://gatsbyafrica.org.uk/vacancies-tenders/"
+    # Gatsby moved the tender archive under /workwithus/ and now serves only the
+    # www host — the old /vacancies-tenders/ path 404s, which is why every run
+    # reported 0 looked at. The /tender/ detail-link pattern is unchanged.
+    BASE_URL    = "https://www.gatsbyafrica.org.uk"
+    LISTING_URL = "https://www.gatsbyafrica.org.uk/workwithus/tenders-and-consulting-2/"
 
     def __init__(self):
         self._cached_all_tenders = None
