@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import platform
+import time
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
@@ -35,6 +36,16 @@ class UNGMScraperAgent:
     # return. Results are sorted by soonest deadline, so the 15 are the most
     # urgent open opportunities — the same page the UI itself shows.
     PAGE_SIZE = 15
+
+    # UNGM answers HTTP 429 once searches arrive faster than roughly one a
+    # second — keywords with no hits used to fire back-to-back and burn a run of
+    # ~30 keywords on 429s. Searches are spaced out, and a 429 is retried after
+    # a backoff (Retry-After when UNGM sends one). Each wait stays ≤ 30s so the
+    # Stop button, which fires on the next log line, is never held up long.
+    MIN_SEARCH_INTERVAL = 3.0
+    RATE_LIMIT_BACKOFF = (10, 20, 30)
+
+    _last_search_at = 0.0
 
     def scrape(self, keywords: list, run_dir: str,
                headless: bool = True, log_callback=None, on_tender_ready=None,
@@ -134,15 +145,13 @@ class UNGMScraperAgent:
             "TypeOfCompetitions": [],
         }
 
-    def _fetch_notice_ids(self, ctx, keyword: str, log) -> list:
-        """POST the public search endpoint and pull notice ids out of the HTML.
-
-        Going straight to the endpoint avoids driving UNGM's AJAX filter form,
-        which needed a keystroke-by-keystroke dance and a settle wait per
-        keyword. The response is an HTML fragment of ARIA grid rows.
-        """
+    def _post_search(self, ctx, keyword: str):
+        """POST one search, keeping at least MIN_SEARCH_INTERVAL between calls."""
+        wait = self.MIN_SEARCH_INTERVAL - (time.monotonic() - self._last_search_at)
+        if wait > 0:
+            time.sleep(wait)
         try:
-            resp = ctx.request.post(
+            return ctx.request.post(
                 self.SEARCH_URL,
                 data=self._search_payload(keyword),
                 headers={
@@ -152,19 +161,48 @@ class UNGMScraperAgent:
                 },
                 timeout=45000,
             )
-        except Exception as e:
-            log(f"   ❌ Search request failed: {e}")
-            return []
+        finally:
+            self._last_search_at = time.monotonic()
+
+    def _fetch_notice_ids(self, ctx, keyword: str, log) -> "list | None":
+        """POST the public search endpoint and pull notice ids out of the HTML.
+
+        Going straight to the endpoint avoids driving UNGM's AJAX filter form,
+        which needed a keystroke-by-keystroke dance and a settle wait per
+        keyword. The response is an HTML fragment of ARIA grid rows.
+
+        Returns None when the search itself failed, so the caller can tell a
+        failed search apart from one that genuinely matched nothing.
+        """
+        attempts = len(self.RATE_LIMIT_BACKOFF) + 1
+        for attempt in range(1, attempts + 1):
+            try:
+                resp = self._post_search(ctx, keyword)
+            except Exception as e:
+                log(f"   ❌ Search request failed: {e}")
+                return None
+
+            if resp.status != 429 or attempt == attempts:
+                break
+
+            backoff = self.RATE_LIMIT_BACKOFF[attempt - 1]
+            try:
+                backoff = min(int(resp.headers.get("retry-after", backoff)), 30)
+            except ValueError:
+                pass
+            log(f"   ⏳ UNGM rate limit (HTTP 429) — waiting {backoff}s before retrying "
+                f"({attempt}/{attempts - 1})...")
+            time.sleep(backoff)
 
         if not resp.ok:
             log(f"   ❌ Search returned HTTP {resp.status}")
-            return []
+            return None
 
         try:
             html = resp.text()
         except Exception as e:
             log(f"   ❌ Could not read search response: {e}")
-            return []
+            return None
 
         ids, seen = [], set()
         for nid in self._NOTICE_ID_RE.findall(html):
@@ -176,7 +214,10 @@ class UNGMScraperAgent:
     def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None, max_age_hours: int = 24, team_id: str = "cnk") -> list:
         notice_ids = self._fetch_notice_ids(ctx, keyword, log)
         if not notice_ids:
-            log(f"   ↳ No results for '{keyword}'")
+            if notice_ids is None:
+                log(f"   ↳ Could not search UNGM for '{keyword}' — keyword skipped (see error above)")
+            else:
+                log(f"   ↳ No results for '{keyword}'")
             log(
                 f"   📊 '{keyword}' summary on UNGM: 0 notice(s) opened → "
                 f"0 without the keyword in the title, 0 blocked by negative keywords, "

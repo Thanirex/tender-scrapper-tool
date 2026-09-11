@@ -1824,6 +1824,53 @@ async def websocket_endpoint(
         credentials = data.get("credentials", {})
         loop        = asyncio.get_running_loop()
 
+        # ── Outbound channel ───────────────────────────────────────────────
+        # Every message this run produces goes through one queue written by a
+        # single task. Previously each log line scheduled its own send_json via
+        # run_coroutine_threadsafe while the keepalive awaited its own send, so
+        # two coroutines could be inside the socket's send at the same time —
+        # which the ASGI websocket does not support. Locally the sends complete
+        # before they can overlap; on a server, with more latency and a busier
+        # loop, they collide and the connection drops mid-run.
+        #
+        # It also makes the final summary/complete messages awaitable, so they
+        # are flushed before the handler returns and closes the socket.
+        out_q: asyncio.Queue = asyncio.Queue(maxsize=10_000)
+        _dropped = {"n": 0}
+
+        def _emit(payload):
+            """Queue a message for delivery. Safe to call from any thread."""
+            try:
+                loop.call_soon_threadsafe(_enqueue, payload)
+            except RuntimeError:
+                pass          # loop already closed — client is gone
+
+        def _enqueue(payload):
+            try:
+                out_q.put_nowait(payload)
+            except asyncio.QueueFull:
+                # Never grow without bound: a runaway log flood must not take
+                # the container down. Report the gap once the backlog clears.
+                _dropped["n"] += 1
+
+        async def _sender():
+            while True:
+                payload = await out_q.get()
+                try:
+                    if payload is None:            # flush sentinel
+                        return
+                    await websocket.send_json(payload)
+                    if _dropped["n"] and out_q.empty():
+                        n, _dropped["n"] = _dropped["n"], 0
+                        await websocket.send_json({
+                            "type": "log",
+                            "message": f"⚠️ {n} log line(s) dropped — output outran the connection.",
+                        })
+                except Exception:
+                    return                          # socket gone; stop sending
+                finally:
+                    out_q.task_done()
+
         # Live report card for this run — fed by the same log stream the
         # user sees, plus exact saved counts from result_cb below.
         stats          = RunStatsCollector(site=site_key)
@@ -1836,15 +1883,11 @@ async def websocket_endpoint(
             _last_progress["t"] = now
             snap = stats.snapshot()
             snap["total_keywords"] = len(keywords)
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json({"type": "progress", "data": snap}), loop
-            )
+            _emit({"type": "progress", "data": snap})
 
         def log_cb(msg):
             stats.feed(msg)
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json({"type": "log", "message": msg}), loop
-            )
+            _emit({"type": "log", "message": msg})
             _send_progress()
 
         # Create session and track tenders per keyword
@@ -1888,9 +1931,7 @@ async def websocket_endpoint(
                 "fields":     {k: str(v) for k, v in (record.get("fields") or {}).items()},
                 "tender_dir": tender_dir_rel,
             }
-            asyncio.run_coroutine_threadsafe(
-                websocket.send_json({"type": "result", "data": payload}), loop
-            )
+            _emit({"type": "result", "data": payload})
 
         def run_scrape():
             zip_path = None
@@ -2025,25 +2066,16 @@ async def websocket_endpoint(
 
                 # Final report card — sent before "complete" so the client
                 # renders the summary the moment the run ends.
-                asyncio.run_coroutine_threadsafe(
-                    websocket.send_json({"type": "summary", "data": stats.to_dict()}),
-                    loop,
-                )
+                _emit({"type": "summary", "data": stats.to_dict()})
 
                 if result and zip_path and zip_path.exists():
                     _db.update_session_zip(session_id, zip_path.name)
-                    asyncio.run_coroutine_threadsafe(
-                        websocket.send_json({"type": "complete", "zip": zip_path.name}), loop
-                    )
+                    _emit({"type": "complete", "zip": zip_path.name})
                 elif result:
-                    asyncio.run_coroutine_threadsafe(
-                        websocket.send_json({"type": "error",
-                                            "message": "ZIP creation failed unexpectedly."}), loop
-                    )
+                    _emit({"type": "error",
+                           "message": "ZIP creation failed unexpectedly."})
                 else:
-                    asyncio.run_coroutine_threadsafe(
-                        websocket.send_json({"type": "complete", "zip": None}), loop
-                    )
+                    _emit({"type": "complete", "zip": None})
 
             except Exception as e:
                 _db.update_session_status(session_id, "failed")
@@ -2054,13 +2086,8 @@ async def websocket_endpoint(
                     if line.strip():
                         log_cb(f"   {line}")
                 # Partial report card — show what was covered before the crash
-                asyncio.run_coroutine_threadsafe(
-                    websocket.send_json({"type": "summary", "data": stats.to_dict()}),
-                    loop,
-                )
-                asyncio.run_coroutine_threadsafe(
-                    websocket.send_json({"type": "error", "message": err_repr}), loop
-                )
+                _emit({"type": "summary", "data": stats.to_dict()})
+                _emit({"type": "error", "message": err_repr})
 
         _db.log_activity(user_id, username, "scrape_start",
                          details={"site": site_key, "keywords": keywords})
@@ -2070,18 +2097,32 @@ async def websocket_endpoint(
             # row) can go 30-60s without emitting anything. Idle proxies and
             # tunnels then drop the socket, which the browser reports as
             # "Connection closed unexpectedly". Ping every 20s to keep it open.
+            # The ping goes through the same queue as everything else so it can
+            # never overlap a log or result write.
             try:
                 while True:
                     await asyncio.sleep(20)
-                    await websocket.send_json({"type": "ping"})
+                    _emit({"type": "ping"})
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 pass
 
+        sender_task    = asyncio.create_task(_sender())
         keepalive_task = asyncio.create_task(_keepalive())
         try:
             await asyncio.to_thread(run_scrape)
         finally:
             keepalive_task.cancel()
+            # Flush whatever is still queued — the run's own "summary" and
+            # "complete" are in there. Returning without draining closed the
+            # socket first, and the client, still showing "Running", reported
+            # "The connection to the server was lost before the run finished."
+            _emit(None)
+            try:
+                await asyncio.wait_for(sender_task, timeout=60)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                sender_task.cancel()
 
     except WebSocketDisconnect:
         print("Client disconnected")

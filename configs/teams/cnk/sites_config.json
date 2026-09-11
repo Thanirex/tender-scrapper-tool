@@ -27,10 +27,12 @@
         "tender_description_selector": ".field-name-body",
         "skip_date_filter": false,
         "date_selector": ".date-display-single",
+        "listing_date_selector": ".date-display-single",
         "requires_stealth": true
     },
     "jobinrwanda": {
         "url": "https://www.jobinrwanda.com/jobs/tender",
+        "search_url_template": "https://www.jobinrwanda.com/jobs/search-result?filter_titles_field={keyword}",
         "display_name": "Job in Rwanda (Tenders)",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
@@ -41,6 +43,7 @@
     },
     "jobintanzania": {
         "url": "https://www.jobintanzania.com/jobs/all",
+        "search_url_template": "https://www.jobintanzania.com/jobs/search-result?filter_titles_field={keyword}",
         "display_name": "Job in Tanzania",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
@@ -51,6 +54,7 @@
     },
     "jobinuganda": {
         "url": "https://www.jobinuganda.com/jobs/all",
+        "search_url_template": "https://www.jobinuganda.com/jobs/search-result?filter_titles_field={keyword}",
         "display_name": "Job in Uganda",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",
@@ -61,6 +65,7 @@
     },
     "jobinkenya": {
         "url": "https://www.jobinkenya.com/jobs/all",
+        "search_url_template": "https://www.jobinkenya.com/jobs/search-result?filter_titles_field={keyword}",
         "display_name": "Job in Kenya",
         "search_input_selector": "input#edit-filter-titles-field",
         "search_button_selector": "button#edit-submit-jobs-display",

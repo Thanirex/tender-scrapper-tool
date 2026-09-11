@@ -106,6 +106,17 @@ _JS_COLLECT = """
 class AfrosaiScraperAgent:
     PAGE_URL = "https://afrosai-e.org.za/tenders/"
 
+    # Page-load attempts before the site is written off for the run
+    LOAD_ATTEMPTS = 2
+
+    def __init__(self):
+        # AFROSAI-E lists every tender on one page, so it is loaded once per
+        # agent (one agent = one run) and each keyword filters the cached
+        # entries. Reloading it for all ~80 keywords made the site stop
+        # answering mid-run, and every keyword after that burned a 45s timeout.
+        self._tenders: "list | None" = None
+        self._load_error: "str | None" = None
+
     def search(self, keyword, output_dir=None, log_callback=None, on_result_ready=None, db=None, team_id="cnk"):
         def log(msg):
             if log_callback:
@@ -116,17 +127,121 @@ class AfrosaiScraperAgent:
         results = []
         log(f"🔍 [AFROSAI-E] Scanning for '{keyword}'...")
 
+        if self._load_error:
+            log(f"   ⚠️ AFROSAI-E tenders page was unreachable earlier in this run — "
+                f"skipping '{keyword}'")
+            return results
+
+        try:
+            if self._tenders is None:
+                self._tenders = self._load_tenders(log)
+            tenders = self._tenders
+            log(f"   ↳ {len(tenders)} tender entry(ies) on page")
+
+            base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "afrosai"
+
+            n_miss = n_neg = n_dup = 0
+            for tender in tenders:
+                title = tender["title"]
+                text  = tender["text"]
+                links = tender["links"]
+
+                if not keyword_matches(keyword, title, text):
+                    n_miss += 1
+                    continue
+
+                neg = find_negative_keyword(title, text, team_id=team_id)
+                if neg:
+                    n_neg += 1
+                    log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
+                    continue
+
+                url = links[0] if links else self.PAGE_URL
+
+                if db and db.is_duplicate(title, url, team_id=team_id):
+                    n_dup += 1
+                    log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
+                    continue
+
+                log(f"   📄 {title[:70]}")
+
+                safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
+                safe_title = re.sub(r'[\\/*?:"<>|]',   "_", title)[:35].strip("_. ")
+                tender_dir = base / safe_kw / safe_title
+                tender_dir.mkdir(parents=True, exist_ok=True)
+
+                downloaded = []
+                for link in links:
+                    saved = self._download_file(link, tender_dir, log)
+                    if saved:
+                        downloaded.append(saved)
+
+                # Always save page text for the summarizer
+                if text:
+                    txt_path = tender_dir / "page_content.txt"
+                    with open(txt_path, "w", encoding="utf-8") as f:
+                        f.write(f"Source: {self.PAGE_URL}\n\n{text}")
+                    if not downloaded:
+                        downloaded.append(str(txt_path))
+                        log(f"      📝 No documents — saved entry text only")
+                    else:
+                        log(f"      📝 Entry text also saved")
+
+                if db:
+                    db.mark_downloaded(title, url, "afrosai", keyword, tender.get("deadline", ""), team_id=team_id)
+
+                rec = {
+                    "keyword":    keyword,
+                    "title":      title,
+                    "url":        url,
+                    "page_text":  text,
+                    "files":      downloaded,
+                    "tender_dir": str(tender_dir),
+                    "site":       "afrosai",
+                    "deadline":   tender.get("deadline", ""),
+                }
+                results.append(rec)
+                if on_result_ready:
+                    on_result_ready(rec)
+
+            log(
+                f"   📊 '{keyword}' summary on AFROSAI-E: {len(tenders)} entry(ies) listed → "
+                f"{n_miss} without the keyword, {n_neg} blocked by negative keywords, "
+                f"{n_dup} already collected, {len(results)} saved"
+            )
+
+        except Exception as e:
+            log(f"❌ AFROSAI-E scrape error: {e}")
+
+        return results
+
+    def _load_tenders(self, log) -> list:
+        """Open the tenders page and collect its entries, retrying once.
+
+        If every attempt fails the error is remembered so the rest of the run
+        skips AFROSAI-E instantly instead of timing out on each keyword.
+        """
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
-            )
             try:
-                page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+                page = browser.new_page(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    )
+                )
+                for attempt in range(1, self.LOAD_ATTEMPTS + 1):
+                    try:
+                        page.goto(self.PAGE_URL, wait_until="domcontentloaded", timeout=45000)
+                        break
+                    except Exception as e:
+                        if attempt == self.LOAD_ATTEMPTS:
+                            self._load_error = str(e)
+                            raise
+                        log(f"   ⏳ AFROSAI-E tenders page did not load — retrying "
+                            f"({attempt}/{self.LOAD_ATTEMPTS - 1})...")
+
                 try:
                     page.wait_for_load_state("networkidle", timeout=10000)
                 except PlaywrightTimeout:
@@ -134,88 +249,12 @@ class AfrosaiScraperAgent:
                 page.wait_for_timeout(1500)
 
                 tenders = self._collect_tenders(page, log)
-                log(f"   ↳ {len(tenders)} tender entry(ies) on page")
-                for t in tenders[:3]:
-                    log(f"   • '{t['title'][:65]}' | files={len(t['links'])}")
-
-                base = Path(output_dir) if output_dir else DOWNLOADS_DIR / "afrosai"
-
-                n_miss = n_neg = n_dup = 0
-                for tender in tenders:
-                    title = tender["title"]
-                    text  = tender["text"]
-                    links = tender["links"]
-
-                    if not keyword_matches(keyword, title, text):
-                        n_miss += 1
-                        continue
-
-                    neg = find_negative_keyword(title, text, team_id=team_id)
-                    if neg:
-                        n_neg += 1
-                        log(f"   🚫 Skipping '{title[:60]}' — negative keyword '{neg}'")
-                        continue
-
-                    url = links[0] if links else self.PAGE_URL
-
-                    if db and db.is_duplicate(title, url, team_id=team_id):
-                        n_dup += 1
-                        log(f"   ⏩ Duplicate: '{title[:60]}' — already collected in an earlier run")
-                        continue
-
-                    log(f"   📄 {title[:70]}")
-
-                    safe_kw    = re.sub(r'[\\/*?:"<>|\s]', "_", keyword)[:20]
-                    safe_title = re.sub(r'[\\/*?:"<>|]',   "_", title)[:35].strip("_. ")
-                    tender_dir = base / safe_kw / safe_title
-                    tender_dir.mkdir(parents=True, exist_ok=True)
-
-                    downloaded = []
-                    for link in links:
-                        saved = self._download_file(link, tender_dir, log)
-                        if saved:
-                            downloaded.append(saved)
-
-                    # Always save page text for the summarizer
-                    if text:
-                        txt_path = tender_dir / "page_content.txt"
-                        with open(txt_path, "w", encoding="utf-8") as f:
-                            f.write(f"Source: {self.PAGE_URL}\n\n{text}")
-                        if not downloaded:
-                            downloaded.append(str(txt_path))
-                            log(f"      📝 No documents — saved entry text only")
-                        else:
-                            log(f"      📝 Entry text also saved")
-
-                    if db:
-                        db.mark_downloaded(title, url, "afrosai", keyword, tender.get("deadline", ""), team_id=team_id)
-
-                    rec = {
-                        "keyword":    keyword,
-                        "title":      title,
-                        "url":        url,
-                        "page_text":  text,
-                        "files":      downloaded,
-                        "tender_dir": str(tender_dir),
-                        "site":       "afrosai",
-                        "deadline":   tender.get("deadline", ""),
-                    }
-                    results.append(rec)
-                    if on_result_ready:
-                        on_result_ready(rec)
-
-                log(
-                    f"   📊 '{keyword}' summary on AFROSAI-E: {len(tenders)} entry(ies) listed → "
-                    f"{n_miss} without the keyword, {n_neg} blocked by negative keywords, "
-                    f"{n_dup} already collected, {len(results)} saved"
-                )
-
-            except Exception as e:
-                log(f"❌ AFROSAI-E scrape error: {e}")
             finally:
                 browser.close()
 
-        return results
+        for t in tenders[:3]:
+            log(f"   • '{t['title'][:65]}' | files={len(t['links'])}")
+        return tenders
 
     def _collect_tenders(self, page, log) -> list:
         try:

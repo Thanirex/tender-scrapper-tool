@@ -105,6 +105,10 @@ Optional keys:
 | `date_selector` | CSS string | Pinpoints the publication date element — more reliable than regex |
 | `requires_auth` | bool | Set `true` if the site needs login; implement a dedicated agent class |
 | `display_name` | string | Human-readable name shown in the UI |
+| `search_url_template` | URL string | Search by URL (`{keyword}` is URL-encoded in) instead of filling the form. Preferred whenever the site's form is a plain GET: one page load per keyword, and each result is opened directly by href. The form keys are then ignored |
+| `listing_date_selector` | CSS string | URL-template sites only: the date element inside each search-result row. Results whose listed date fails the date filter are skipped (📅) without opening the detail page |
+| `requires_stealth` | bool | Launch Chromium with automation flags hidden and a desktop user agent. If a detail page still shows a Cloudflare challenge, it is fetched over plain HTTP and loaded into the tab instead |
+| `skip_date_filter` | bool | Site only exposes a deadline, not a publish date — skip the date check and rely on dedup |
 
 ---
 
