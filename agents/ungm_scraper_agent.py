@@ -45,7 +45,17 @@ class UNGMScraperAgent:
     MIN_SEARCH_INTERVAL = 3.0
     RATE_LIMIT_BACKOFF = (10, 20, 30)
 
+    # UNGM guards the search endpoint with an ASP.NET anti-forgery token: the
+    # listing page carries it in a hidden input and its own JavaScript echoes
+    # it back in this header. Without the header the endpoint answers a bare
+    # "400 Bad Request" for every payload, which is how this first showed up —
+    # every keyword skipped with no other explanation. The header name has no
+    # leading underscores even though the input's name does.
+    TOKEN_HEADER = "RequestVerificationToken"
+    TOKEN_INPUT  = 'input[name="__RequestVerificationToken"]'
+
     _last_search_at = 0.0
+    _verification_token = None
 
     def scrape(self, keywords: list, run_dir: str,
                headless: bool = True, log_callback=None, on_tender_ready=None,
@@ -82,8 +92,14 @@ class UNGMScraperAgent:
             page = ctx.new_page()
             try:
                 # One visit to the public listing so the context picks up the
-                # cookies UNGM's search endpoint expects.
+                # cookies UNGM's search endpoint expects, and the anti-forgery
+                # token that must accompany them.
                 self._goto(page, self.NOTICES_URL, log, wait_for="input#txtNoticeFilterTitle")
+                if self._read_verification_token(page):
+                    log("🔑 UNGM verification token acquired.")
+                else:
+                    log("⚠️ No UNGM verification token on the listing page — "
+                        "searches will likely be rejected with HTTP 400.")
 
                 for keyword in keywords:
                     log(f"▶️ Keyword: '{keyword}'")
@@ -145,26 +161,54 @@ class UNGMScraperAgent:
             "TypeOfCompetitions": [],
         }
 
+    def _read_verification_token(self, page) -> "str | None":
+        """Pull the anti-forgery token out of the listing page's hidden input.
+
+        The page carries more than one such input; the first is the one its own
+        search JavaScript sends. Stored on the agent and returned so callers can
+        tell whether the page actually had one.
+        """
+        try:
+            token = page.evaluate(
+                """(sel) => { const i = document.querySelector(sel);
+                              return i ? i.value : null; }""",
+                self.TOKEN_INPUT,
+            )
+        except Exception:
+            token = None
+        self._verification_token = token or None
+        return self._verification_token
+
+    def _refresh_verification_token(self, page, log) -> bool:
+        """Reload the listing page to replace a stale or missing token."""
+        if not self._goto(page, self.NOTICES_URL, log,
+                          wait_for="input#txtNoticeFilterTitle"):
+            return False
+        return bool(self._read_verification_token(page))
+
     def _post_search(self, ctx, keyword: str):
         """POST one search, keeping at least MIN_SEARCH_INTERVAL between calls."""
         wait = self.MIN_SEARCH_INTERVAL - (time.monotonic() - self._last_search_at)
         if wait > 0:
             time.sleep(wait)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": self.NOTICES_URL,
+        }
+        if self._verification_token:
+            headers[self.TOKEN_HEADER] = self._verification_token
         try:
             return ctx.request.post(
                 self.SEARCH_URL,
                 data=self._search_payload(keyword),
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Requested-With": "XMLHttpRequest",
-                    "Referer": self.NOTICES_URL,
-                },
+                headers=headers,
                 timeout=45000,
             )
         finally:
             self._last_search_at = time.monotonic()
 
-    def _fetch_notice_ids(self, ctx, keyword: str, log) -> "list | None":
+    def _fetch_notice_ids(self, ctx, keyword: str, log, page=None) -> "list | None":
         """POST the public search endpoint and pull notice ids out of the HTML.
 
         Going straight to the endpoint avoids driving UNGM's AJAX filter form,
@@ -175,12 +219,24 @@ class UNGMScraperAgent:
         failed search apart from one that genuinely matched nothing.
         """
         attempts = len(self.RATE_LIMIT_BACKOFF) + 1
+        token_refreshed = False
         for attempt in range(1, attempts + 1):
             try:
                 resp = self._post_search(ctx, keyword)
             except Exception as e:
                 log(f"   ❌ Search request failed: {e}")
                 return None
+
+            # A bare 400 is how UNGM rejects a missing or stale anti-forgery
+            # token. Tokens are tied to a cookie that can rotate mid-run, so
+            # reload the listing page and try once more before giving up.
+            if resp.status == 400 and page is not None and not token_refreshed:
+                token_refreshed = True
+                log("   ↻ Search rejected (HTTP 400) — refreshing UNGM verification token...")
+                if self._refresh_verification_token(page, log):
+                    continue
+                log("   ❌ Could not refresh the UNGM verification token.")
+                break
 
             if resp.status != 429 or attempt == attempts:
                 break
@@ -195,7 +251,9 @@ class UNGMScraperAgent:
             time.sleep(backoff)
 
         if not resp.ok:
-            log(f"   ❌ Search returned HTTP {resp.status}")
+            hint = (" — UNGM rejected the anti-forgery token; the listing page "
+                    "layout may have changed") if resp.status == 400 else ""
+            log(f"   ❌ Search returned HTTP {resp.status}{hint}")
             return None
 
         try:
@@ -212,7 +270,7 @@ class UNGMScraperAgent:
         return ids
 
     def _search_keyword(self, page, ctx, keyword: str, run_dir: str, log, on_tender_ready=None, db=None, max_age_hours: int = 24, team_id: str = "cnk") -> list:
-        notice_ids = self._fetch_notice_ids(ctx, keyword, log)
+        notice_ids = self._fetch_notice_ids(ctx, keyword, log, page=page)
         if not notice_ids:
             if notice_ids is None:
                 log(f"   ↳ Could not search UNGM for '{keyword}' — keyword skipped (see error above)")

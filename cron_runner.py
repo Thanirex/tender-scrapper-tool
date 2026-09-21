@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from date_utils import now_ist_naive
+from team_status import is_team_paused
 
 logger = logging.getLogger("taiq.cron")
 
@@ -225,6 +226,12 @@ def _load_all_keywords(team_id: str = "cnk") -> list:
 def run_daily_job(team_id: str = "cnk"):
     """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team."""
     global _run_generation, _active_gen, _last_progress
+
+    # Every route into a run (scheduler, catch-up, manual trigger,
+    # cron_runner_tmi.py) lands here, so a paused portal is stopped once.
+    if is_team_paused(team_id):
+        logger.info(f"[TAiQ Cron] Run for team {team_id} skipped — portal is paused (team_status.py).")
+        return
 
     # Only one run may own the module-level state (_current_run_id, _stats,
     # _log_buffer, _log_file_path, _stop_event) at a time.  Without this,
@@ -1896,7 +1903,7 @@ def _check_and_fire_if_needed():
             ).start()
 
     # TMI catch-up check: past 9:00 PM IST (21:00) and TMI has not run today
-    if now_ist.hour >= 21:
+    if now_ist.hour >= 21 and not is_team_paused("tmi"):
         tmi_run = _db.get_cron_run_by_date(today_str, team_id="tmi")
         if not tmi_run and _current_run_id is None:
             logger.info("[TAiQ Cron] Catch-up: past 9pm IST with no TMI run today — firing TMI job")
@@ -1929,19 +1936,23 @@ def init_scheduler(db):
         misfire_grace_time=3600,
     )
 
-    # 2) TMI Daily Scrape at 09:00 PM IST (21:00)
-    _scheduler.add_job(
-        run_daily_job,
-        trigger=CronTrigger(hour=21, minute=0, timezone=IST),
-        args=["tmi"],
-        id="daily_taiq_job_tmi",
-        name="TAiQ TMI Daily Scrape (09:00 PM IST)",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
+    # 2) TMI Daily Scrape at 09:00 PM IST (21:00) — not scheduled while paused
+    if not is_team_paused("tmi"):
+        _scheduler.add_job(
+            run_daily_job,
+            trigger=CronTrigger(hour=21, minute=0, timezone=IST),
+            args=["tmi"],
+            id="daily_taiq_job_tmi",
+            name="TAiQ TMI Daily Scrape (09:00 PM IST)",
+            replace_existing=True,
+            misfire_grace_time=3600,
+        )
 
     _scheduler.start()
-    logger.info("[TAiQ Cron] Scheduler started — CNK job at 07:00 IST & TMI job at 21:00 IST")
+    if is_team_paused("tmi"):
+        logger.info("[TAiQ Cron] Scheduler started — CNK job at 07:00 IST (TMI portal paused, no TMI job)")
+    else:
+        logger.info("[TAiQ Cron] Scheduler started — CNK job at 07:00 IST & TMI job at 21:00 IST")
 
     threading.Thread(
         target=_check_and_fire_if_needed, daemon=True, name="taiq-startup-check"

@@ -311,6 +311,23 @@ def _make_run_zip(dirs: list[Path], base: Path, zip_stem: str) -> Path:
     return zip_path
 
 
+# ── Per-tender result logging ──────────────────────────────────────────────
+
+def _log_level1_saved(log_cb, excel_path: str, fields: dict):
+    """Report what actually landed on disk for one tender.
+
+    A job posting gets no Level 1 workbook (see the job gate in
+    agents/summarizer_agent.py), so claiming "Saved: Level1_….xlsx" for one
+    would contradict the line the summarizer just printed. Its documents are
+    still downloaded and kept.
+    """
+    if str((fields or {}).get("IS_JOB_TENDER", "")).strip().lower() == "yes":
+        log_cb(f"💼 Job posting — documents kept, no Level 1 written: "
+               f"{os.path.basename(os.path.dirname(excel_path))}")
+    else:
+        log_cb(f"✅ Saved: {excel_path}")
+
+
 # ── Standard scraper (ngobox / devnet) ────────────────────────────────────
 
 def _run_standard_scrape(site_key: str, keywords: list, log_cb,
@@ -345,7 +362,7 @@ def _run_standard_scrape(site_key: str, keywords: list, log_cb,
             tender_dirs.append(tender_dir)
             if result_cb:
                 result_cb(record)
-            log_cb(f"✅ Saved: {excel_path}")
+            _log_level1_saved(log_cb, excel_path, fields)
         return on_result_ready
 
     from date_utils import get_max_age_hours
@@ -419,7 +436,7 @@ def _run_nasscom_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -498,7 +515,7 @@ def _run_trademarkafrica_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -577,7 +594,7 @@ def _run_worldbank_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -656,7 +673,7 @@ def _run_fhi360_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -735,7 +752,7 @@ def _run_gatsbyafrica_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -814,7 +831,7 @@ def _run_jsi_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -895,7 +912,7 @@ def _run_chai_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -976,7 +993,7 @@ def _run_drc_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1057,7 +1074,7 @@ def _run_afrosai_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1138,7 +1155,7 @@ def _run_idi_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1218,7 +1235,7 @@ def _run_lic_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1297,7 +1314,7 @@ def _run_isa_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1376,7 +1393,7 @@ def _run_mercycorps_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1441,7 +1458,7 @@ def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1506,7 +1523,7 @@ def _run_reliefweb_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1588,7 +1605,7 @@ def _run_ngobox_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1669,7 +1686,7 @@ def _run_au_scrape(site_key: str, keywords: list, log_cb,
         tender_dirs.append(tender_dir)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     for kw in keywords:
         log_cb(f"▶️ Processing keyword: {kw}")
@@ -1774,7 +1791,7 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
         excel_paths.append(excel_path)
         if result_cb:
             result_cb(record)
-        log_cb(f"✅ Saved: {excel_path}")
+        _log_level1_saved(log_cb, excel_path, fields)
 
     log_cb("🚀 Starting UNGM Agentic Scraper...")
     if show_browser:

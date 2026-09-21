@@ -304,6 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <span class="drc-rv drc-rv-app" title="Approved">${icon('check')}${d.approved}</span>
                     <span class="drc-rv drc-rv-rej" title="Rejected">${icon('cross')}${d.rejected}</span>
                     <span class="drc-rv drc-rv-pen" title="Awaiting review">${icon('hourglass')}${d.pending} pending</span>
+                    ${d.job ? `<span class="drc-rv drc-rv-job" title="Job postings — no Level 1 generated">${icon('briefcase')}${d.job} job</span>` : ''}
                     ${d.approval_rate !== null && d.approval_rate !== undefined
                         ? `<span class="drc-rv-rate">${d.approval_rate}% approved</span>` : ''}
                 </div>
@@ -1045,15 +1046,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (titleEl) titleEl.textContent = tender.title || 'Opportunity Details';
 
-        const rvStatus = tender.review_status || 'pending';
+        const rvStatus = _reviewBucket(tender);
         const rvIcon   = icon(rvStatus === 'approved' ? 'check'
-                            : rvStatus === 'rejected' ? 'cross' : 'hourglass');
+                            : rvStatus === 'rejected' ? 'cross'
+                            : rvStatus === 'job'      ? 'briefcase' : 'hourglass');
 
         if (pillsEl) {
             pillsEl.innerHTML = `
                 <span class="site-badge site-${tender.site}" title="${_escapeHtml(_siteLabel(tender))}">${_escapeHtml(_siteShortLabel(tender))}</span>
                 <span class="kw-tag">${_escapeHtml(tender.keyword || '')}</span>
-                <span class="td-mpill td-mpill-${rvStatus}">${rvIcon} ${rvStatus}</span>
+                <span class="td-mpill td-mpill-${rvStatus}">${rvIcon} ${_reviewLabel(rvStatus)}</span>
                 ${tender.source === 'taiq' ? `<span class="taiq-source-tag">${icon('bot')}TAiQ Auto</span>` : ''}
             `;
         }
@@ -1114,11 +1116,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Helpers ────────────────────────────────────────────────────────────
 
+    // An undecided job posting reports as its own state, never as review
+    // backlog — the same rule the Status page applies.
+    function _reviewBucket(t) {
+        const st = t.review_status || 'pending';
+        return (st === 'pending' && t.tender_type === 'job') ? 'job' : st;
+    }
+
+    function _reviewLabel(bucket) {
+        return bucket === 'job' ? 'job tender' : bucket;
+    }
+
     function _tenderRow(t) {
-        const rvStatus = t.review_status || 'pending';
+        const rvStatus = _reviewBucket(t);
         const rvSource = t.source === 'taiq' ? 'taiq' : 'manual';
         const rvIcon   = icon(rvStatus === 'approved' ? 'check'
-                            : rvStatus === 'rejected' ? 'cross' : 'hourglass');
+                            : rvStatus === 'rejected' ? 'cross'
+                            : rvStatus === 'job'      ? 'briefcase' : 'hourglass');
         const taiqTag  = t.source === 'taiq'
             ? `<span class="taiq-source-tag">${icon('bot')}TAiQ</span>` : '';
 
@@ -1140,7 +1154,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${taiqTag}
                 </td>
                 <td class="tt-date">${_escapeHtml(t.published_date || '—')}</td>
-                <td><span class="tt-status tt-status-${rvStatus}">${rvIcon} ${rvStatus}</span></td>
+                <td><span class="tt-status tt-status-${rvStatus}">${rvIcon} ${_reviewLabel(rvStatus)}</span></td>
                 <td style="text-align:right">
                     <span class="row-menu-wrap">
                         <button type="button" class="row-menu-btn" aria-haspopup="true" aria-label="Row actions">⋮</button>

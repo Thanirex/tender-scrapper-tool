@@ -3,7 +3,12 @@
     "allow": [
       "Bash(./.venv/Scripts/python.exe -c ' *)",
       "Bash(python -m py_compile cron_runner.py)",
-      "Bash(python -m py_compile api.py)"
+      "Bash(python -m py_compile api.py)",
+      "Read(//c/Users/Thaneesh/.claude/projects/c--Users-Thaneesh-Documents-GitHub-Tender-Scrapper-tool-old/memory/**)",
+      "Bash(python test_job_bucket.py)",
+      "Bash(python test_job_gate.py)",
+      "Bash(python ungm_capture.py)",
+      "Bash(python -m py_compile agents/ungm_scraper_agent.py)"
     ]
   }
 }

@@ -455,9 +455,15 @@ document.addEventListener('DOMContentLoaded', () => {
             return `<div class="card-field"><strong>${k}</strong><span>${val}</span></div>`;
         }).join('');
 
-        const rvStatus = t.review_status || 'pending';
-        const rvIcon   = rvStatus === 'approved' ? '✅' : rvStatus === 'rejected' ? '❌' : '⏳';
-        const rvChip   = `<span class="card-review-chip chip-${rvStatus}">${rvIcon} ${rvStatus}</span>`;
+        // An undecided job posting shows as its own state, not as review
+        // backlog — see the Status page for the same rule.
+        const isJob    = (t.review_status || 'pending') === 'pending' && t.tender_type === 'job';
+        const rvStatus = isJob ? 'job' : (t.review_status || 'pending');
+        const rvIcon   = rvStatus === 'approved' ? '✅'
+                       : rvStatus === 'rejected' ? '❌'
+                       : rvStatus === 'job'      ? '💼' : '⏳';
+        const rvLabel  = rvStatus === 'job' ? 'job tender' : rvStatus;
+        const rvChip   = `<span class="card-review-chip chip-${rvStatus}">${rvIcon} ${rvLabel}</span>`;
 
         let actionsHtml = '<div class="card-actions">';
         if (t.url) {

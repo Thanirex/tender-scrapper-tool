@@ -30,6 +30,17 @@ _MODEL = "gemma-4-31b-it"          # Gemini model
 _MAX_RETRIES = 3
 _RATE_LIMIT_BACKOFF_S = 65
 
+# The triage call only needs enough text to tell a job advert from a
+# procurement notice — that is always clear from the opening of the notice.
+# Reading 500k chars to answer it would cost exactly what this gate exists
+# to save.
+_CLASSIFY_CHARS = 6_000
+
+# Key written into the Level 1 field dict when the gate says "job posting".
+# It travels with `fields` into write_level1_report() and the DB summary_json,
+# which is how every caller learns the verdict without changing its own code.
+JOB_FIELD = "IS_JOB_TENDER"
+
 
 class SummarizerAgent:
 
@@ -41,6 +52,8 @@ class SummarizerAgent:
         "ELIGIBILITY_DETAILS", "ACCESS_REQUIREMENTS", "DEPENDENCIES", "CONSORTIUM",
         "SCOPE_OF_WORK", "DELIVERY_PERIOD", "EMDS", "PAYMENT_TERMS", "PRICING_CONDITIONS",
         "SELECTION_CRITERIA", "SCOPE_CLARITY", "SCOPE_QUANTUM", "CLARIFICATIONS", "PENALTIES",
+        # Job-posting triage
+        "CLASSIFICATION", JOB_FIELD, "JOB_ROLE_SUMMARY",
     }
 
     def __init__(self):
@@ -112,6 +125,17 @@ class SummarizerAgent:
         # Strip null bytes and other control chars that can cause gRPC serialization errors
         text = text.replace('\x00', '').replace('\x0b', '').replace('\x0c', '')
         snippet = text[:max_chars]
+
+        # ── Job-posting gate ──────────────────────────────────────────────────
+        # An individual job advert has no Level 1 to extract — running the full
+        # 500k-char extraction on one burns tokens for a document the team will
+        # reject anyway. Triage it on a short snippet first and stop here if it
+        # is a vacancy; the downloaded documents are already on disk either way.
+        job_fields = self._classify_job(snippet, log, should_stop)
+        if job_fields:
+            log("💼 [Summarizer] Job posting detected — skipping Level 1 extraction.")
+            return job_fields
+
         log(f"🤖 [Summarizer] Extracting Level 1 fields from {len(snippet):,} chars...")
 
         system = (
@@ -124,14 +148,85 @@ class SummarizerAgent:
                              should_stop=should_stop)
         if raw is None:
             return {}
-        return self._parse_level1_fields(raw)
+        fields = self._parse_level1_fields(raw)
+        # Triage-only keys are not Level 1 data — drop them if the model
+        # echoes one back, so they never reach the report or the DB.
+        for key in ("CLASSIFICATION", JOB_FIELD, "JOB_ROLE_SUMMARY"):
+            fields.pop(key, None)
+        return fields
+
+    # ── Job-posting triage ────────────────────────────────────────────────────
+
+    def _classify_job(self, snippet: str, log, should_stop=None) -> dict:
+        """Return the job field dict if this is an individual vacancy, else {}.
+
+        Fails OPEN: any error, empty reply, or unparseable answer returns {} so
+        the tender takes the normal Level 1 path. A missed job costs tokens; a
+        tender wrongly gated loses its Level 1 silently, which is far worse.
+        """
+        raw = self._call_api(
+            "You are a procurement analyst who separates recruitment adverts "
+            "from procurement notices. Answer only in the labelled format asked for.",
+            self._build_classify_prompt(snippet[:_CLASSIFY_CHARS]),
+            log, error_return=None, should_stop=should_stop,
+        )
+        if not raw:
+            return {}
+
+        parsed = self._parse_level1_fields(raw)
+        verdict = (parsed.get("CLASSIFICATION") or "").strip().upper()
+        if not verdict.startswith("JOB"):
+            return {}
+
+        fields = {JOB_FIELD: "Yes"}
+        for key in ("BID_TITLE", "INVITING_AUTHORITY", "DEADLINE", "JOB_ROLE_SUMMARY"):
+            val = (parsed.get(key) or "").strip()
+            if val:
+                fields[key] = val
+        return fields
+
+    @staticmethod
+    def _build_classify_prompt(snippet: str) -> str:
+        return f"""Decide what kind of opportunity the content below is.
+
+JOB — a recruitment advert for ONE person to be employed or engaged personally:
+  a vacancy, a staff position, an internship, a fellowship, a roster or talent
+  pool call, a "call for CVs", or a Terms of Reference for an INDIVIDUAL
+  consultant where the applicant is a named person submitting a CV.
+
+TENDER — a procurement notice inviting ORGANISATIONS to bid: an RFP, RFQ, ITB,
+  EOI, a call for proposals, a framework agreement, or any notice where a firm,
+  NGO or institution submits a technical and financial proposal.
+
+Decision rules:
+- If the applicant is a person submitting a CV, it is JOB.
+- If the applicant is a company or organisation submitting a proposal, it is TENDER.
+- A Terms of Reference alone does not decide it — look at WHO may apply.
+- If the content is genuinely ambiguous, answer TENDER.
+
+OUTPUT — output ONLY these labelled lines, nothing else. Give the last three
+lines only when the answer is JOB; write "Not specified" if a value is absent.
+
+CLASSIFICATION: JOB or TENDER
+BID_TITLE: the position or notice title
+INVITING_AUTHORITY: the hiring organisation
+DEADLINE: the application deadline exactly as written
+JOB_ROLE_SUMMARY: one sentence, max 200 chars, on the role and its location
+
+CONTENT:
+{snippet}"""
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
     @staticmethod
     def _make_logger(log_callback):
-        """Return a unified log function that routes to the callback or stdout."""
-        return log_callback if log_callback else print
+        """Return a unified log function that routes to the callback or stdout.
+
+        The stdout fallback goes through _safe_print: every log line here
+        carries an emoji, and on a Windows console stdout is cp1252, where a
+        bare print() of one raises UnicodeEncodeError out of a logging call.
+        """
+        return log_callback if log_callback else _safe_print
 
     @staticmethod
     def _has_content(text) -> bool:

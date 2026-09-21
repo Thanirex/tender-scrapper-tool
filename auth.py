@@ -7,6 +7,8 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+from team_status import is_team_paused, paused_message
+
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "taiq-default-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
@@ -37,13 +39,22 @@ def create_access_token(user_id: int, username: str, role: str, team_id: str = "
 
 def decode_token(token: str) -> dict:
     try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
     except JWTError:
         raise HTTPException(
             status_code=401,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    # Tokens live 7 days, so a paused team's open sessions are cut off here —
+    # every authenticated route and the scrape WebSocket pass through this.
+    if is_team_paused(payload.get("team_id")):
+        raise HTTPException(
+            status_code=401,
+            detail=paused_message(payload.get("team_id")),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return payload
 
 
 async def get_current_user(

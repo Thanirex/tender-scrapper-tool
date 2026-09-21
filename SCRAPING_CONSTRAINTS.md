@@ -15,11 +15,11 @@ Read this before adding a new scraping target.
 
 ### How it works
 
-| Layer | Where date comes from | Behaviour if not found |
-|---|---|---|
-| UNGM | `verified["Published on"]` field scraped from `span.label` elements; falls back to body text regex | Tender is **skipped** with a warning log |
-| Standard sites (ngobox, …) | Optional `date_selector` CSS in `sites_config.json`; falls back to body text regex | Tender is **skipped** with a warning log |
-| devnet | `skip_date_filter: true` — date check bypassed | N/A — dedup handles repeats |
+| Layer                       | Where date comes from                                                                                  | Behaviour if not found                        |
+| --------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------- |
+| UNGM                        | `verified["Published on"]` field scraped from `span.label` elements; falls back to body text regex | Tender is**skipped** with a warning log |
+| Standard sites (ngobox, …) | Optional`date_selector` CSS in `sites_config.json`; falls back to body text regex                  | Tender is**skipped** with a warning log |
+| devnet                      | `skip_date_filter: true` — date check bypassed                                                      | N/A — dedup handles repeats                  |
 
 ### Date formats supported (auto-detected, no config needed)
 
@@ -42,6 +42,7 @@ publication day).
 ### Adding date support for a new site
 
 Option A — CSS selector (preferred, most reliable):
+
 ```json
 "my_site": {
   "date_selector": "span.posted-date"
@@ -100,20 +101,29 @@ Every standard site must have these keys:
 
 Optional keys:
 
-| Key | Type | Purpose |
-|---|---|---|
-| `date_selector` | CSS string | Pinpoints the publication date element — more reliable than regex |
-| `requires_auth` | bool | Set `true` if the site needs login; implement a dedicated agent class |
-| `display_name` | string | Human-readable name shown in the UI |
-| `search_url_template` | URL string | Search by URL (`{keyword}` is URL-encoded in) instead of filling the form. Preferred whenever the site's form is a plain GET: one page load per keyword, and each result is opened directly by href. The form keys are then ignored |
-| `listing_date_selector` | CSS string | URL-template sites only: the date element inside each search-result row. Results whose listed date fails the date filter are skipped (📅) without opening the detail page |
-| `requires_stealth` | bool | Launch Chromium with automation flags hidden and a desktop user agent. If a detail page still shows a Cloudflare challenge, it is fetched over plain HTTP and loaded into the tab instead |
-| `skip_date_filter` | bool | Site only exposes a deadline, not a publish date — skip the date check and rely on dedup |
+| Key                       | Type       | Purpose                                                                                                                                                                                                                               |
+| ------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `date_selector`         | CSS string | Pinpoints the publication date element — more reliable than regex                                                                                                                                                                    |
+| `requires_auth`         | bool       | Set`true` if the site needs login; implement a dedicated agent class                                                                                                                                                                |
+| `display_name`          | string     | Human-readable name shown in the UI                                                                                                                                                                                                   |
+| `search_url_template`   | URL string | Search by URL (`{keyword}` is URL-encoded in) instead of filling the form. Preferred whenever the site's form is a plain GET: one page load per keyword, and each result is opened directly by href. The form keys are then ignored |
+| `listing_date_selector` | CSS string | URL-template sites only: the date element inside each search-result row. Results whose listed date fails the date filter are skipped (📅) without opening the detail page                                                             |
+| `requires_stealth`      | bool       | Launch Chromium with automation flags hidden and a desktop user agent. If a detail page still shows a Cloudflare challenge, it is fetched over plain HTTP and loaded into the tab instead                                             |
+| `skip_date_filter`      | bool       | Site only exposes a deadline, not a publish date — skip the date check and rely on dedup                                                                                                                                             |
 
 ---
 
 ## 4. UNGM-Specific Rules
 
+- **Anti-forgery token (required):** `/Public/Notice/Search` rejects every POST
+  with a bare `400 Bad Request` unless the request carries a
+  `RequestVerificationToken` header. The value comes from the **first**
+  `input[name="__RequestVerificationToken"]` on the listing page — note the
+  header name has *no* leading underscores while the input's does. The agent
+  reads it after its one visit to `/Public/Notice` and, on any 400, reloads
+  that page and retries once (the token is tied to a cookie that can rotate
+  mid-run). **Symptom if this breaks again:** every keyword skipped with
+  `❌ Search returned HTTP 400`, no other explanation.
 - **Results cap:** `RESULTS_CAP = 10` tenders per keyword (set at top of `ungm_scraper_agent.py`).
 - **Active-only filter:** Enabled automatically before each keyword search.
 - **Date field used:** `Published on` from verified UNGM fields (ground truth).
@@ -137,12 +147,13 @@ Pre-filtering by title prevents wasted Gemini quota and noisy Level 1 reports.
 
 **Where the check lives:**
 
-| Agent | File | Position in flow |
-|---|---|---|
-| Standard sites (devnet, ngobox, …) | `agents/scraper_agent.py` | After title extraction, before content fetch and date filter |
-| UNGM | `agents/ungm_scraper_agent.py` | After title extraction and error-page check, before Quantum/download flow |
+| Agent                               | File                             | Position in flow                                                          |
+| ----------------------------------- | -------------------------------- | ------------------------------------------------------------------------- |
+| Standard sites (devnet, ngobox, …) | `agents/scraper_agent.py`      | After title extraction, before content fetch and date filter              |
+| UNGM                                | `agents/ungm_scraper_agent.py` | After title extraction and error-page check, before Quantum/download flow |
 
 **Log message when skipped:**
+
 ```
 🚫 Skipping '<title>' — keyword '<keyword>' not in title
 ```
@@ -175,6 +186,7 @@ link to the search-results page, which is useless outside the live session.
    not work but the tender content is still saved.
 
 **When adding a new site:**
+
 - Test whether `page.url` changes after clicking a result. If it does, no extra work.
 - If the site uses AJAX/postback (URL stays the same), identify which query param
   uniquely identifies the tender (e.g. `job_id=`, `notice_id=`, `ref=`) and add it
@@ -189,9 +201,9 @@ link to the search-results page, which is useless outside the live session.
 
 **Rule:** Before sending content to the LLM, apply these caps:
 
-| Cap | Value | Why |
-|---|---|---|
-| Per-file text | 25,000 chars | One large PDF can consume the entire combined budget |
+| Cap             | Value         | Why                                                                 |
+| --------------- | ------------- | ------------------------------------------------------------------- |
+| Per-file text   | 25,000 chars  | One large PDF can consume the entire combined budget                |
 | Combined prompt | 120,000 chars | Keeps token count within Gemini's safe TPM window during batch runs |
 
 **Rationale:** A single UNGM tender can download 8+ PDFs totalling several MB of text.
@@ -200,6 +212,7 @@ Without per-file caps the combined prompt can exceed 500 K chars, reliably trigg
 summarizer returns `{}` and `write_level1_report` produces an empty template.
 
 **Where the caps are applied:**
+
 - Manual path: `api.py` `on_tender_ready()` — `_MAX_CHARS_PER_FILE = 25_000`,
   `max_chars=120_000` passed to `summarizer.summarize_level1()`.
 - TAiQ Auto path: `cron_runner.py` `on_ungm_tender_ready()` — same constants, same
@@ -211,19 +224,61 @@ Never pass raw file text to the summarizer without truncating first.
 
 ---
 
+## 7a. Job-Posting Gate — No Level 1 for Individual Vacancies
+
+**Rule:** `summarize_level1()` triages every record before extracting anything.
+It sends the first 6,000 chars to Gemini and asks one question: individual job
+advert, or procurement notice? A job advert returns immediately with
+
+```
+{"IS_JOB_TENDER": "Yes", "BID_TITLE": ..., "INVITING_AUTHORITY": ...,
+ "DEADLINE": ..., "JOB_ROLE_SUMMARY": ...}
+```
+
+and the full extraction never runs. **Roughly 1.2 K tokens instead of up to
+125 K** for a document the team rejects by hand today.
+
+**The flag travels inside `fields`.** Nothing else in the pipeline needed
+changing: every caller already passes that dict to `write_level1_report()` and
+to `record_cron_tender()` / `record_found_tender()`. Two places read it:
+
+- `agents/excel_writer.py` — `_is_job_posting()` skips the record, so a job
+  posting gets **no Level 1 xlsx at all**. Downloaded documents are untouched;
+  the agent saves them before the summarizer ever runs.
+- `db.py` — `_tender_type_of()` writes the `tender_type` column
+  (`'tender' | 'job'`) on both tender tables.
+
+**Fail OPEN.** Any API error, empty reply, or verdict that is not exactly `JOB`
+falls through to the normal Level 1 path. A missed job advert costs tokens; a
+real tender wrongly gated loses its Level 1 silently, which is far worse. The
+prompt itself is told to answer `TENDER` when genuinely ambiguous.
+
+**Display bucket, not a review status.** `review_status` stays `'pending'` — an
+undecided job posting simply *displays* as a blue "Job Tender" pill instead of
+"Pending", and is excluded from pending counts, approval rate, and the
+oldest-pending-age metric. `TenderDB._BUCKET_SQL` is the single expression that
+resolves this; every count, trend, and filter must use it or the Status tiles
+stop adding up. A job posting can still be approved or rejected, and a decision
+once made always wins the pill.
+
+**When adding a new site:** nothing to do. The gate lives inside the summarizer,
+so any agent that calls `summarize_level1()` inherits it.
+
+---
+
 ## 8. Two Execution Paths — Manual vs TAiQ Auto
 
 The system has two code paths that reach the same scraping agents. Constraints and
 bugs in one path often do **not** automatically apply to the other.
 
-| Aspect | Manual (WebSocket) | TAiQ Auto (Cron) |
-|---|---|---|
-| Entry point | `api.py` `/ws/scrape` | `cron_runner.py` `run_daily_job()` |
-| Credentials | User-provided in session | `UNGM_EMAIL` / `UNGM_PASSWORD` env vars |
-| Keywords | User selection | All keywords from `Keywords.json` |
-| Dedup table | `downloaded_tenders` (global) | `cron_dedup` (global, persists across runs) |
-| Log output | Live WebSocket stream → browser | `_write_log()` buffer → TAiQ dashboard + disk |
-| Summarizer call | `summarize_level1(text, log_callback=log_cb, max_chars=120_000)` | Same — must stay in sync |
+| Aspect          | Manual (WebSocket)                                                 | TAiQ Auto (Cron)                                 |
+| --------------- | ------------------------------------------------------------------ | ------------------------------------------------ |
+| Entry point     | `api.py` `/ws/scrape`                                          | `cron_runner.py` `run_daily_job()`           |
+| Credentials     | User-provided in session                                           | `UNGM_EMAIL` / `UNGM_PASSWORD` env vars      |
+| Keywords        | User selection                                                     | All keywords from`Keywords.json`               |
+| Dedup table     | `downloaded_tenders` (global)                                    | `cron_dedup` (global, persists across runs)    |
+| Log output      | Live WebSocket stream → browser                                   | `_write_log()` buffer → TAiQ dashboard + disk |
+| Summarizer call | `summarize_level1(text, log_callback=log_cb, max_chars=120_000)` | Same — must stay in sync                        |
 
 **Critical rule:** Any logic change to how tenders are filtered, summarized, or saved
 in one path must be mirrored in the other. The two `on_tender_ready` callbacks
@@ -281,21 +336,21 @@ in one path must be mirrored in the other. The two `on_tender_ready` callbacks
 
 ## 11. Log Messages Reference
 
-| Message | Meaning |
-|---|---|
-| `📅 Skipping '...' — published X (>24h ago)` | Date filter rejected the tender |
-| `⚠️ No publication date found for '...' — skipping` | Date could not be extracted; tender skipped |
-| `⏩ Duplicate skipped: ...` | Dedup check rejected the tender (seen in a previous run) |
-| `🚫 Skipping '...' — keyword '...' not in title` | Keyword relevance filter rejected the tender |
-| `⚠️ Could not find a stable job URL for '...' — link may not work` | AJAX/postback site; no job_id found via any URL strategy |
-| `📂 Reading N file(s) for summarization...` | Attachment text extraction starting |
-| `⚠️ Empty/unreadable: filename` | `read_file()` returned no text for this attachment |
-| `⚠️ read_file error on filename: ...` | Exception during file text extraction |
-| `📝 Combined content: X chars across Y section(s)` | Total input size being sent to Gemini |
-| `❌ Nothing to summarize — page text empty and no readable files` | Summarizer received empty input; Level 1 will be a blank template |
-| `⚠️ Summarizer returned no fields for: ...` | Gemini returned `{}` — likely rate-limited or safety-filtered |
-| `✅ Logged in.` | UNGM session established |
-| `⚠️ Session expired — redirected to login. Skipping.` | UNGM session dropped mid-run |
+| Message                                                                 | Meaning                                                           |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `📅 Skipping '...' — published X (>24h ago)`                         | Date filter rejected the tender                                   |
+| `⚠️ No publication date found for '...' — skipping`                | Date could not be extracted; tender skipped                       |
+| `⏩ Duplicate skipped: ...`                                           | Dedup check rejected the tender (seen in a previous run)          |
+| `🚫 Skipping '...' — keyword '...' not in title`                     | Keyword relevance filter rejected the tender                      |
+| `⚠️ Could not find a stable job URL for '...' — link may not work` | AJAX/postback site; no job_id found via any URL strategy          |
+| `📂 Reading N file(s) for summarization...`                           | Attachment text extraction starting                               |
+| `⚠️ Empty/unreadable: filename`                                     | `read_file()` returned no text for this attachment              |
+| `⚠️ read_file error on filename: ...`                               | Exception during file text extraction                             |
+| `📝 Combined content: X chars across Y section(s)`                    | Total input size being sent to Gemini                             |
+| `❌ Nothing to summarize — page text empty and no readable files`    | Summarizer received empty input; Level 1 will be a blank template |
+| `⚠️ Summarizer returned no fields for: ...`                         | Gemini returned`{}` — likely rate-limited or safety-filtered   |
+| `✅ Logged in.`                                                       | UNGM session established                                          |
+| `⚠️ Session expired — redirected to login. Skipping.`              | UNGM session dropped mid-run                                      |
 
 ---
 
@@ -306,21 +361,23 @@ dashboard, the TAiQ page, and the manual scraper page by **parsing the log
 stream**. The markers below are therefore a contract: changing their wording or
 emoji silently breaks the rejection counts on every report card.
 
-| Marker (must appear in the line) | Counted as |
-|---|---|
-| `🚫` + `not in title` | keyword not in title |
-| `🚫` + `negative keyword` | blocked by negative keyword |
-| `📅` | published more than 24 h ago |
-| `⚠️` + `No publication date` or `No date in URL` | no publish date found |
-| `⏭` | archived / expired / closed |
-| `⏩` | duplicate (already collected) |
-| `⚠️` + `Error on row` or `Row error` | row-level scrape error |
-| `📊 '<kw>' summary on <SITE>: N …` | per-keyword rollup — counts in prose (`N without the keyword`, `N blocked by negative keywords`, `N older than 24h`, `N missing a publish date`, `N archived/expired`, `N already collected`, `N errored`) |
-| `🌐 Phase X / Y — SITE` (cron only) | switches the site all following lines are attributed to |
-| `✅ Saved tender #N` (cron only) | one saved tender |
-| `N tenders processed for '<kw>'` (UNGM) | one keyword finished |
+| Marker (must appear in the line)                         | Counted as                                                                                                                                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `🚫` + `not in title`                                | keyword not in title                                                                                                                                                                                                      |
+| `🚫` + `negative keyword`                            | blocked by negative keyword                                                                                                                                                                                               |
+| `📅`                                                   | published more than 24 h ago                                                                                                                                                                                              |
+| `⚠️` + `No publication date` or `No date in URL` | no publish date found                                                                                                                                                                                                     |
+| `⏭`                                                   | archived / expired / closed                                                                                                                                                                                               |
+| `⏩`                                                   | duplicate (already collected)                                                                                                                                                                                             |
+| `⚠️` + `Error on row` or `Row error`             | row-level scrape error                                                                                                                                                                                                    |
+| `📊 '<kw>' summary on <SITE>: N …`                    | per-keyword rollup — counts in prose (`N without the keyword`, `N blocked by negative keywords`, `N older than 24h`, `N missing a publish date`, `N archived/expired`, `N already collected`, `N errored`) |
+| `🌐 Phase X / Y — SITE` (cron only)                   | switches the site all following lines are attributed to                                                                                                                                                                   |
+| `✅ Saved tender #N` (cron only)                       | one saved tender                                                                                                                                                                                                          |
+| `N tenders processed for '<kw>'` (UNGM)                | one keyword finished                                                                                                                                                                                                      |
+| `💼 [Summarizer] Job posting detected …`              | nothing — deliberately unparsed (see below)                                                                                                                                                                              |
 
 **When adding a new agent:**
+
 1. Emit the same per-line markers for every skip/reject (copy an existing agent).
 2. Emit the `📊 '<keyword>' summary on <SITE>: …` line at the end of each keyword
    using the exact phrases above — this is what backfills skips that were not
@@ -330,3 +387,7 @@ emoji silently breaks the rejection counts on every report card.
 4. `saved` is **not** parsed from agent logs — the runner counts it exactly when
    a tender is written to the DB (`record_saved()` in `api.py` result_cb /
    `✅ Saved tender #` in `cron_runner.py`).
+5. The job gate (§7a) uses `💼` precisely because it collides with none of the
+   markers above — a job posting is still **saved**, so counting it as a
+   rejection would make `listed` stop reconciling. Job counts come from the
+   `tender_type` column, never from the log stream.

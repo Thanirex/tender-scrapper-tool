@@ -15,6 +15,23 @@ def _normalize(title: str) -> str:
     return re.sub(r'\s+', ' ', t).strip()
 
 
+# Written into the Level 1 field dict by agents/summarizer_agent.py when its
+# job gate fires. Spelled out here rather than imported so the storage layer
+# keeps no dependency on the Gemini client module.
+_JOB_FIELD = "IS_JOB_TENDER"
+
+
+def _tender_type_of(summary: dict) -> str:
+    """'job' when the summarizer gated this record as an individual vacancy.
+
+    Both record_*_tender() calls already receive the field dict, so every
+    scraper on both runners is covered without touching a single call site.
+    """
+    if not summary:
+        return "tender"
+    return "job" if str(summary.get(_JOB_FIELD, "")).strip().lower() == "yes" else "tender"
+
+
 # ── Database backend detection ─────────────────────────────────────────────────
 #
 # Set DATABASE_URL in .env to switch backends:
@@ -428,11 +445,15 @@ class TenderDB:
             # review_status: 'pending' | 'approved' | 'rejected'
             # MySQL cannot put a DEFAULT on TEXT columns, so use VARCHAR there.
             _status_col = f"{_ENUM_TEXT} NOT NULL DEFAULT 'pending'"
+            # tender_type: 'tender' | 'job' — set by the summarizer's job gate.
+            # Existing rows default to 'tender', so history renders unchanged.
+            _type_col = f"{_ENUM_TEXT} NOT NULL DEFAULT 'tender'"
             for _t in ("cron_tenders", "found_tenders"):
                 self._add_col(conn, _t, "review_status",    _status_col)
                 self._add_col(conn, _t, "reviewed_by",      "INTEGER")
                 self._add_col(conn, _t, "reviewed_by_name", "TEXT")
                 self._add_col(conn, _t, "reviewed_at",      "TEXT")
+                self._add_col(conn, _t, "tender_type",      _type_col)
 
             conn.execute(f"""
                 CREATE TABLE IF NOT EXISTS tender_comments (
@@ -598,11 +619,12 @@ class TenderDB:
             cur = conn.execute(
                 """INSERT INTO found_tenders
                    (session_id, keyword, title, url, site, published_date,
-                    summary_json, tender_dir, found_at, team_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    summary_json, tender_dir, found_at, team_id, tender_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (session_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
-                 tender_dir or "", now, team_id or "cnk"),
+                 tender_dir or "", now, team_id or "cnk",
+                 _tender_type_of(summary)),
             )
             return cur.lastrowid
 
@@ -1029,16 +1051,18 @@ class TenderDB:
                 scanned |= produced
 
                 # ── Review progress for tenders found that day ─────────────
-                counts = {"approved": 0, "rejected": 0, "pending": 0}
+                # Undecided job postings are counted as their own bucket, not
+                # as review backlog — nobody is waiting to review them.
+                counts = {"approved": 0, "rejected": 0, "pending": 0, "job": 0}
                 for table in self._REVIEW_SOURCES.values():
-                    rev_sql = f"""SELECT COALESCE(review_status, 'pending') AS st,
+                    rev_sql = f"""SELECT {self._BUCKET_SQL} AS st,
                                         COUNT(*) AS n
                                  FROM {table} WHERE found_at LIKE ?"""
                     rev_params = [like]
                     if team_id:
                         rev_sql += " AND team_id = ?"
                         rev_params.append(team_id)
-                    rev_sql += " GROUP BY COALESCE(review_status, 'pending')"
+                    rev_sql += f" GROUP BY {self._BUCKET_SQL}"
                     for r in conn.execute(rev_sql, rev_params).fetchall():
                         counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
                 decided = counts["approved"] + counts["rejected"]
@@ -1084,6 +1108,7 @@ class TenderDB:
                     "approved":        counts["approved"],
                     "rejected":        counts["rejected"],
                     "pending":         counts["pending"],
+                    "job":             counts["job"],
                     "approval_rate":   (round(100 * counts["approved"] / decided)
                                         if decided else None),
                 })
@@ -1097,19 +1122,19 @@ class TenderDB:
         while actually carrying the selected date's counts, which is the
         contradiction this replaces. Everything here is genuinely all-time.
         """
-        totals = {"approved": 0, "rejected": 0, "pending": 0}
+        totals = {"approved": 0, "rejected": 0, "pending": 0, "job": 0}
         site_map: dict = {}
 
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
-                st_sql = f"""SELECT COALESCE(review_status, 'pending') AS st,
+                st_sql = f"""SELECT {self._BUCKET_SQL} AS st,
                                     COUNT(*) AS n
                              FROM {table}"""
                 st_params: list = []
                 if team_id:
                     st_sql += " WHERE team_id = ?"
                     st_params.append(team_id)
-                st_sql += " GROUP BY COALESCE(review_status, 'pending')"
+                st_sql += f" GROUP BY {self._BUCKET_SQL}"
                 for r in conn.execute(st_sql, st_params).fetchall():
                     totals[r["st"]] = totals.get(r["st"], 0) + r["n"]
 
@@ -1133,6 +1158,7 @@ class TenderDB:
             "pending_review": totals["pending"],
             "approved":       totals["approved"],
             "rejected":       totals["rejected"],
+            "job":            totals["job"],
             "by_site":        by_site,
         }
 
@@ -1204,11 +1230,12 @@ class TenderDB:
             cur = conn.execute(
                 """INSERT INTO cron_tenders
                    (run_id, keyword, title, url, site, published_date,
-                    summary_json, tender_dir, found_at, team_id)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    summary_json, tender_dir, found_at, team_id, tender_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (run_id, keyword, title, url or None, site,
                  published_date or "", json.dumps(summary or {}),
-                 tender_dir or "", now, team_id or "cnk"),
+                 tender_dir or "", now, team_id or "cnk",
+                 _tender_type_of(summary)),
             )
             return cur.lastrowid
 
@@ -1513,6 +1540,18 @@ class TenderDB:
 
     _REVIEW_SOURCES = {"taiq": "cron_tenders", "manual": "found_tenders"}
 
+    # Display bucket for a tender row: an undecided job posting reports as
+    # 'job' rather than 'pending', so job adverts never show up as review
+    # backlog. A job someone *has* approved or rejected keeps that decision.
+    # Written as one expression because every count, trend and filter has to
+    # bucket rows the same way or the tiles stop adding up.
+    _BUCKET_SQL = """CASE
+            WHEN COALESCE(review_status, 'pending') = 'pending'
+             AND COALESCE(tender_type, 'tender') = 'job'
+            THEN 'job'
+            ELSE COALESCE(review_status, 'pending')
+        END"""
+
     def _review_table(self, source: str) -> str:
         table = self._REVIEW_SOURCES.get(source)
         if not table:
@@ -1526,6 +1565,7 @@ class TenderDB:
         except Exception:
             row["fields"] = {}
         row["review_status"] = row.get("review_status") or "pending"
+        row["tender_type"]   = row.get("tender_type") or "tender"
         return row
 
     def get_review_tender(self, source: str, tender_id: int) -> "dict | None":
@@ -1582,18 +1622,18 @@ class TenderDB:
     def get_review_summary(self, month: str, team_id: str = None) -> dict:
         """Counts + review metrics for one IST month ('YYYY-MM')."""
         like   = f"{month}%"
-        counts = {"approved": 0, "rejected": 0, "pending": 0}
+        counts = {"approved": 0, "rejected": 0, "pending": 0, "job": 0}
         review_spans: list = []   # (found_at, reviewed_at) of decided tenders
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
-                q = f"""SELECT COALESCE(review_status, 'pending') AS st,
+                q = f"""SELECT {self._BUCKET_SQL} AS st,
                                COUNT(*) AS n
                         FROM {table} WHERE found_at LIKE ?"""
                 params = [like]
                 if team_id:
                     q += " AND team_id = ?"
                     params.append(team_id)
-                q += " GROUP BY COALESCE(review_status, 'pending')"
+                q += f" GROUP BY {self._BUCKET_SQL}"
                 rows = conn.execute(q, params).fetchall()
                 for r in rows:
                     counts[r["st"]] = counts.get(r["st"], 0) + r["n"]
@@ -1608,7 +1648,8 @@ class TenderDB:
                     sparams.append(team_id)
                 review_spans += conn.execute(sq, sparams).fetchall()
 
-        counts["scraped"] = counts["approved"] + counts["rejected"] + counts["pending"]
+        counts["scraped"] = (counts["approved"] + counts["rejected"]
+                             + counts["pending"] + counts["job"])
 
         # Approval rate = share of decided tenders that were approved
         decided = counts["approved"] + counts["rejected"]
@@ -1635,7 +1676,7 @@ class TenderDB:
             for table in self._REVIEW_SOURCES.values():
                 q = f"""SELECT MIN(found_at) AS m FROM {table}
                         WHERE found_at LIKE ?
-                          AND COALESCE(review_status, 'pending') = 'pending'"""
+                          AND ({self._BUCKET_SQL}) = 'pending'"""
                 params = [like]
                 if team_id:
                     q += " AND team_id = ?"
@@ -1667,19 +1708,19 @@ class TenderDB:
         with self._connect() as conn:
             for table in self._REVIEW_SOURCES.values():
                 q = f"""SELECT SUBSTR(found_at, 1, 7) AS m,
-                               COALESCE(review_status, 'pending') AS st,
+                               {self._BUCKET_SQL} AS st,
                                COUNT(*) AS n
                         FROM {table}"""
                 params = []
                 if team_id:
                     q += " WHERE team_id = ?"
                     params.append(team_id)
-                q += " GROUP BY SUBSTR(found_at, 1, 7), COALESCE(review_status, 'pending')"
+                q += f" GROUP BY SUBSTR(found_at, 1, 7), {self._BUCKET_SQL}"
                 rows = conn.execute(q, params).fetchall()
                 for r in rows:
                     b = buckets.setdefault(
                         r["m"], {"month": r["m"], "approved": 0,
-                                 "rejected": 0, "pending": 0}
+                                 "rejected": 0, "pending": 0, "job": 0}
                     )
                     b[r["st"]] = b.get(r["st"], 0) + r["n"]
         ordered = sorted(buckets.values(), key=lambda b: b["month"], reverse=True)
@@ -1687,7 +1728,7 @@ class TenderDB:
             ordered = [b for b in ordered if b["month"] <= end_month]
         months = ordered[:limit]
         for b in months:
-            b["scraped"] = b["approved"] + b["rejected"] + b["pending"]
+            b["scraped"] = b["approved"] + b["rejected"] + b["pending"] + b["job"]
         return list(reversed(months))
 
     def get_review_tenders(self, month: str, status: str = None,
@@ -1702,7 +1743,10 @@ class TenderDB:
                     sql += " AND team_id = ?"
                     params.append(team_id)
                 if status:
-                    sql += " AND COALESCE(review_status, 'pending') = ?"
+                    # 'job' is a display bucket, not a stored review_status —
+                    # the same CASE the tiles count with resolves it here so a
+                    # tile's number always matches the list it opens.
+                    sql += f" AND ({self._BUCKET_SQL}) = ?"
                     params.append(status)
                 if q:
                     sql += " AND (title LIKE ? OR keyword LIKE ? OR site LIKE ?)"

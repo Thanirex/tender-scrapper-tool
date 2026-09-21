@@ -3041,7 +3041,7 @@ details.advanced-settings summary {
 /* Stat tiles */
 .rv-tiles {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: 1rem;
     margin-bottom: 1rem;
 }
@@ -3112,11 +3112,15 @@ details.advanced-settings summary {
 .rv-spark-approved path { stroke: var(--success); } .rv-spark-approved circle { fill: var(--success); }
 .rv-spark-rejected path { stroke: var(--danger); }  .rv-spark-rejected circle { fill: var(--danger); }
 .rv-spark-pending  path { stroke: #f59e0b; }        .rv-spark-pending  circle { fill: #f59e0b; }
+.rv-spark-job      path { stroke: #2563eb; }        .rv-spark-job      circle { fill: #2563eb; }
 
 .rv-tile-all      { --rv-tint: #eef2ff; --rv-ink: #4f46e5; }
 .rv-tile-approved { --rv-tint: #dcfce7; --rv-ink: #15803d; }
 .rv-tile-rejected { --rv-tint: #fee2e2; --rv-ink: #b91c1c; }
 .rv-tile-pending  { --rv-tint: #fef3c7; --rv-ink: #b45309; }
+/* Job postings are informational, not a decision — blue keeps them clearly
+   apart from the approve / reject / pending traffic-light set. */
+.rv-tile-job      { --rv-tint: #dbeafe; --rv-ink: #1d4ed8; }
 
 .rv-tile-num { font-size: 2.05rem; font-weight: 800; line-height: 1.1; }
 .rv-tile-lbl {
@@ -3130,6 +3134,7 @@ details.advanced-settings summary {
 .rv-tile-approved .rv-tile-num { color: #15803d; }
 .rv-tile-rejected .rv-tile-num { color: #b91c1c; }
 .rv-tile-pending  .rv-tile-num { color: #b45309; }
+.rv-tile-job      .rv-tile-num { color: #1d4ed8; }
 /* Active = this tile's status is filtering the table. A ring rather than a
    fill, so the tint still reads as the status colour and the numbers keep
    their contrast. */
@@ -3215,6 +3220,7 @@ details.advanced-settings summary {
 .rvc-seg-approved { fill: var(--success); }
 .rvc-seg-rejected { fill: var(--danger); }
 .rvc-seg-pending  { fill: #fbbf24; }
+.rvc-seg-job      { fill: #60a5fa; }
 .rvc-col-current .rvc-xtick { fill: var(--accent); }
 .rvc-col-current .rvc-total { fill: var(--accent); }
 .rv-trend-legend {
@@ -3280,6 +3286,7 @@ details.advanced-settings summary {
 .rv-leg-approved     { background: var(--success); }
 .rv-leg-rejected     { background: var(--danger); }
 .rv-leg-pending      { background: #fbbf24; }
+.rv-leg-job          { background: #60a5fa; }
 
 /* Filter row */
 .rv-filter-row {
@@ -3358,6 +3365,7 @@ details.advanced-settings summary {
 .rv-pill-approved { background: var(--success-light); color: var(--success-text); }
 .rv-pill-rejected { background: #fee2e2; color: #991b1b; }
 .rv-pill-pending  { background: #fef3c7; color: #92400e; }
+.rv-pill-job      { background: #dbeafe; color: #1e40af; }
 
 /* Modal */
 .rv-modal-overlay {
@@ -3432,6 +3440,18 @@ details.advanced-settings summary {
 }
 /* Long values take the full row so sentences wrap whole, not mid-word */
 .rv-field-wide { grid-column: 1 / -1; }
+/* Why this tender has no Level 1 — an explanation, not an extracted field */
+.rv-field-job {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 10px;
+    background: #eff6ff;
+    color: #1e40af;
+    border: 1px solid #bfdbfe;
+}
+.rv-field-job .ic { flex: 0 0 auto; width: 16px; height: 16px; margin-top: 0.1rem; }
 .rv-field strong {
     color: var(--text-muted);
     font-size: 0.68rem;
@@ -3525,6 +3545,7 @@ details.advanced-settings summary {
 .rv-badge-approved { background: var(--success-light); color: var(--success-text); }
 .rv-badge-rejected { background: #fee2e2; color: #991b1b; }
 .rv-badge-pending  { background: #fef3c7; color: #92400e; }
+.rv-badge-job      { background: #dbeafe; color: #1e40af; }
 
 /* Comments timeline */
 .rv-comments { display: flex; flex-direction: column; gap: 0.5rem; }
@@ -3610,6 +3631,7 @@ details.advanced-settings summary {
 .chip-approved { background: var(--success-light); color: var(--success-text); }
 .chip-rejected { background: #fee2e2; color: #991b1b; }
 .chip-pending  { background: #fef3c7; color: #92400e; }
+.chip-job      { background: #dbeafe; color: #1e40af; }
 .card-review-link {
     font-size: 0.78rem;
     font-weight: 600;
@@ -3798,6 +3820,7 @@ a { text-decoration: none; }
 .drc-rv-app { color: #15803d; font-weight: 600; }
 .drc-rv-rej { color: #b91c1c; font-weight: 600; }
 .drc-rv-pen { color: #b45309; font-weight: 600; }
+.drc-rv-job { color: #1d4ed8; font-weight: 600; }
 .drc-rv-rate {
     margin-left: auto;
     font-size: 0.74rem;
@@ -4182,6 +4205,7 @@ a { text-decoration: none; }
 .td-mpill-approved { background: #dcfce7; color: #166534; }
 .td-mpill-rejected { background: #fee2e2; color: #991b1b; }
 .td-mpill-pending  { background: #fef3c7; color: #b45309; }
+.td-mpill-job      { background: #dbeafe; color: #1e40af; }
 
 .td-modal-close {
     background: transparent;
@@ -4584,6 +4608,7 @@ body.has-sidebar .main-layout {
 .tt-status-approved { background: #dcfce7; color: #166534; }
 .tt-status-rejected { background: #fee2e2; color: #991b1b; }
 .tt-status-pending  { background: #fef3c7; color: #b45309; }
+.tt-status-job      { background: #dbeafe; color: #1e40af; }
 
 /* ── Row action (kebab) menu ──────────────────────────────────────────────── */
 .row-menu-wrap { position: relative; display: inline-block; }

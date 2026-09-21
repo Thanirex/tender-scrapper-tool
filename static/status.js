@@ -122,6 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('rv-num-approved').textContent = data.approved ?? 0;
             document.getElementById('rv-num-rejected').textContent = data.rejected ?? 0;
             document.getElementById('rv-num-pending').textContent  = data.pending  ?? 0;
+            document.getElementById('rv-num-job').textContent      = data.job      ?? 0;
             _renderTileIcons();
             _renderTileTrends(data);
             _renderMetrics(data);
@@ -141,6 +142,7 @@ document.addEventListener('DOMContentLoaded', () => {
             approved: 'check',
             rejected: 'cross',
             pending:  'clock',
+            job:      'briefcase',
         };
         Object.entries(map).forEach(([k, name]) => {
             const el = document.getElementById(`rv-ic-${k}`);
@@ -190,7 +192,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function _renderTileTrends(d) {
         const months = d.months || [];
-        const TONES = { scraped: 'neutral', approved: 'approved', rejected: 'rejected', pending: 'pending' };
+        const TONES = { scraped: 'neutral', approved: 'approved', rejected: 'rejected',
+                        pending: 'pending', job: 'job' };
 
         Object.keys(TONES).forEach(key => {
             const spark = document.getElementById(`rv-spark-${key}`);
@@ -272,9 +275,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 ['approved', m.approved],
                 ['rejected', m.rejected],
                 ['pending',  m.pending],
+                ['job',      m.job || 0],
             ];
             // Stack upward from the baseline: approved, then rejected, then
-            // pending — the three always sum to scraped.
+            // pending, then job postings — the four always sum to scraped.
             let acc = 0;
             const rects = segs.map(([tone, val]) => {
                 if (!val) return '';
@@ -288,7 +292,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const isCur = m.month === month;
             return `
                 <g class="rvc-col${isCur ? ' rvc-col-current' : ''}" data-month="${m.month}" role="button" tabindex="0">
-                    <title>${_prettyMonth(m.month)} — ${m.scraped} scraped · ${m.approved} approved · ${m.rejected} rejected · ${m.pending} pending</title>
+                    <title>${_prettyMonth(m.month)} — ${m.scraped} scraped · ${m.approved} approved · ${m.rejected} rejected · ${m.pending} pending · ${m.job || 0} job</title>
                     <rect class="rvc-hit" x="${(cx(i) - slot / 2).toFixed(1)}" y="${PT}" width="${slot.toFixed(1)}" height="${ih}"/>
                     ${rects}
                     <text class="rvc-total" x="${cx(i).toFixed(1)}" y="${(y(m.scraped) - 8).toFixed(1)}">${m.scraped}</text>
@@ -355,7 +359,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    const _STATUS_ORDER = { pending: 0, rejected: 1, approved: 2 };
+    const _STATUS_ORDER = { pending: 0, job: 1, rejected: 2, approved: 3 };
+
+    // A job posting that nobody has decided on reads as its own state rather
+    // than as review backlog — the team asked for these to stop looking like
+    // work waiting on them. A decision, once made, still wins the pill.
+    function _bucket(t) {
+        const st = t.review_status || 'pending';
+        return (st === 'pending' && t.tender_type === 'job') ? 'job' : st;
+    }
 
     function _renderTable() {
         // Sort indicator on headers
@@ -372,8 +384,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const sorted = [...tenders].sort((a, b) => {
             let va, vb;
             if (sortKey === 'review_status') {
-                va = _STATUS_ORDER[a.review_status || 'pending'];
-                vb = _STATUS_ORDER[b.review_status || 'pending'];
+                va = _STATUS_ORDER[_bucket(a)];
+                vb = _STATUS_ORDER[_bucket(b)];
             } else if (sortKey === 'id') {
                 va = a.id; vb = b.id;
             } else {
@@ -393,9 +405,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function _rowTr(t) {
-        const st    = t.review_status || 'pending';
+        const st    = _bucket(t);
         const byWho = t.reviewed_by_name ? ` · ${_esc(t.reviewed_by_name)}` : '';
-        const statusPill = st === 'pending'
+        const statusPill = st === 'job'
+            ? `<span class="rv-pill rv-pill-job" title="Individual job posting — no Level 1 document generated">${icon('briefcase')}Job Tender</span>`
+            : st === 'pending'
             ? `<span class="rv-pill rv-pill-pending" title="Awaiting review">${icon('hourglass')}Pending</span>`
             : st === 'approved'
                 ? `<span class="rv-pill rv-pill-approved" title="Approved${byWho ? ' by' + byWho.slice(2) : ''} on ${_prettyDT(t.reviewed_at)}">${icon('check')}Approved${byWho}</span>`
@@ -444,9 +458,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function _renderModal(t, comments) {
-        const st = t.review_status || 'pending';
+        // `st` is the display bucket; `decided` is the real review state, and
+        // only that one may drive the decision panel — a job posting is still
+        // undecided and can still be approved or rejected.
+        const st      = _bucket(t);
+        const decided = (t.review_status || 'pending') !== 'pending';
         mBadge.innerHTML = st === 'approved' ? `${icon('check')}Approved`
                          : st === 'rejected' ? `${icon('cross')}Rejected`
+                         : st === 'job'      ? `${icon('briefcase')}Job Tender`
                                              : `${icon('hourglass')}Pending`;
         mBadge.className   = `rv-status-badge rv-badge-${st}`;
         mSite.textContent  = (t.site || '').toUpperCase();
@@ -454,7 +473,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mKw.textContent    = t.keyword || '';
         mTitle.textContent = t.title || 'Unknown Opportunity';
 
-        if (st !== 'pending') {
+        if (decided) {
             const by = t.reviewed_by_name
                 ? ` by <strong>${_esc(t.reviewed_by_name)}</strong>` : '';
             mReviewInfo.classList.remove('hidden');
@@ -467,13 +486,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Overview fields — long values span the full width so words never clip
         const fields = t.fields || {};
-        mFields.innerHTML = Object.keys(fields).length
+        const jobNote = t.tender_type === 'job'
+            ? `<div class="rv-field rv-field-wide rv-field-job">${icon('briefcase')}
+                   <span>Classified as an individual job posting — no Level 1 document
+                   was generated. Any documents found were still downloaded and are
+                   listed below.</span>
+               </div>`
+            : '';
+        mFields.innerHTML = jobNote + (Object.keys(fields).length
             ? Object.entries(fields).map(([k, v]) => {
                 const val  = String(v);
                 const wide = val.length > 90 ? ' rv-field-wide' : '';
                 return `<div class="rv-field${wide}"><strong>${_esc(k)}</strong><span>${_esc(val)}</span></div>`;
             }).join('')
-            : '<span class="empty-msg">No summary fields available.</span>';
+            : '<span class="empty-msg">No summary fields available.</span>');
 
         // Links
         let links = '';
@@ -488,7 +514,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mInput.value = '';
         mErr.classList.add('hidden');
         _setBtnsBusy(false);
-        if (st === 'pending') {
+        if (!decided) {
             mDecision.classList.remove('hidden');
             mLocked.classList.add('hidden');
             mDecTitle.textContent = 'Your review';

@@ -68,7 +68,8 @@ CREATE TABLE IF NOT EXISTS found_tenders (
     review_status    TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
     reviewed_by      INTEGER,
     reviewed_by_name TEXT,
-    reviewed_at      TEXT
+    reviewed_at      TEXT,
+    tender_type      TEXT    NOT NULL DEFAULT 'tender'    -- tender|job
 );
 CREATE INDEX IF NOT EXISTS idx_found_session ON found_tenders (session_id);
 
@@ -127,7 +128,8 @@ CREATE TABLE IF NOT EXISTS cron_tenders (
     review_status    TEXT    NOT NULL DEFAULT 'pending',  -- pending|approved|rejected
     reviewed_by      INTEGER,
     reviewed_by_name TEXT,
-    reviewed_at      TEXT
+    reviewed_at      TEXT,
+    tender_type      TEXT    NOT NULL DEFAULT 'tender'    -- tender|job
 );
 CREATE INDEX IF NOT EXISTS idx_cron_tenders_run ON cron_tenders (run_id);
 

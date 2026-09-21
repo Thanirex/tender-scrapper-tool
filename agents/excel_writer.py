@@ -5,6 +5,8 @@ from openpyxl import Workbook
 from date_utils import now_ist_naive
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 
+from agents.summarizer_agent import JOB_FIELD
+
 _THIN = Side(style="thin")
 _BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
 
@@ -150,8 +152,26 @@ def _safe_sheet_name(title: str, existing: list) -> str:
     return name
 
 
+def _is_job_posting(record: dict) -> bool:
+    """A record the summarizer gated as an individual job advert.
+
+    The flag rides inside `fields`, so every caller passes it along without
+    knowing it exists — this is the single place the pipeline acts on it.
+    """
+    return str((record.get("fields") or {}).get(JOB_FIELD, "")).strip().lower() == "yes"
+
+
 def write_level1_report(records: list, output_path: str) -> None:
-    """Create one Excel file with one Level-1 sheet per tender record."""
+    """Create one Excel file with one Level-1 sheet per tender record.
+
+    Job postings carry no Level 1 fields, so they get no sheet. If every
+    record in the batch is a job posting, no file is written at all — the
+    tender folder keeps its downloaded documents and nothing else.
+    """
+    records = [r for r in records if not _is_job_posting(r)]
+    if not records:
+        return
+
     wb = Workbook()
     wb.remove(wb.active)   # discard the default blank sheet
 

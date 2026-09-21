@@ -91,7 +91,10 @@ async def review_tenders(
     month = _valid_month(month)
     if not month:
         return JSONResponse({"error": "month must be YYYY-MM"}, status_code=400)
-    if status and status not in ("approved", "rejected", "pending"):
+    # 'job' filters the job-posting bucket — undecided tenders the summarizer
+    # gated as individual vacancies. It is a display bucket, not a stored
+    # review_status, so it is valid here but never a valid decision.
+    if status and status not in ("approved", "rejected", "pending", "job"):
         return JSONResponse({"error": "Invalid status filter"}, status_code=400)
     team_id = user.get("team_id", "cnk")
     tenders = request.app.state.db.get_review_tenders(month, status=status, q=q, team_id=team_id)
