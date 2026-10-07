@@ -4,6 +4,7 @@ import json
 import time
 import asyncio
 import platform
+import uuid
 import zipfile
 from pathlib import Path
 from datetime import datetime
@@ -14,6 +15,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.background import BackgroundTask
 from dotenv import load_dotenv
 
 from agents.scraper_agent import ScraperAgent
@@ -286,15 +288,26 @@ async def download_tender_folder(
 
     safe_name = re.sub(r'[^a-zA-Z0-9_\-]', '_', tender_dir.name)[:50]
     zip_name  = f"tender_{safe_name}.zip"
-    zip_path  = OUTPUTS_DIR / zip_name
+    # One file per request: the work below now runs in a thread, so two
+    # people downloading the same tender would otherwise write one file at once.
+    zip_path  = OUTPUTS_DIR / f"tender_{safe_name}_{uuid.uuid4().hex[:8]}.zip"
 
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for fpath in tender_dir.rglob("*"):
-            if fpath.is_file():
-                zf.write(fpath, fpath.relative_to(tender_dir))
+    def _build_zip():
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fpath in tender_dir.rglob("*"):
+                if fpath.is_file():
+                    zf.write(fpath, fpath.relative_to(tender_dir))
+
+    # Compressing a folder of PDFs takes seconds. Done inline it froze the
+    # event loop, and with it every open /ws/scrape socket: no log lines, no
+    # pings, and no replies to uvicorn's own keepalive ping, which closes the
+    # socket after 20s without one. A user downloading files could end
+    # someone else's manual run.
+    await asyncio.to_thread(_build_zip)
 
     _log_download(payload, "download_tender_zip", tender_dir.name)
-    return FileResponse(str(zip_path), media_type="application/zip", filename=zip_name)
+    return FileResponse(str(zip_path), media_type="application/zip", filename=zip_name,
+                        background=BackgroundTask(zip_path.unlink, missing_ok=True))
 
 
 # ── Zip helper ─────────────────────────────────────────────────────────────
@@ -1812,6 +1825,23 @@ def _run_ungm_scrape(keywords: list, credentials: dict, log_cb,
 
 # ── WebSocket scrape endpoint ──────────────────────────────────────────────
 
+def _ws_safe(obj):
+    """Copy of a payload with every string made UTF-8 encodable.
+
+    Scraped text can carry lone surrogates — half an emoji, cut by a page's own
+    JavaScript or by a PDF extractor. json.dumps accepts them, but the ASGI
+    server's UTF-8 encode raises, and that one message used to end the whole
+    stream.
+    """
+    if isinstance(obj, str):
+        return obj.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(obj, dict):
+        return {_ws_safe(k): _ws_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_ws_safe(v) for v in obj]
+    return obj
+
+
 @app.websocket("/ws/scrape")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -1870,21 +1900,45 @@ async def websocket_endpoint(
                 # the container down. Report the gap once the backlog clears.
                 _dropped["n"] += 1
 
+        async def _send(payload):
+            """Send one message. A message that cannot be encoded is cleaned
+            and resent rather than allowed to fail the stream — before this,
+            one bad character in a scraped title stopped every later message,
+            "complete" included, and the browser reported a lost connection."""
+            try:
+                await websocket.send_json(payload)
+            except (TypeError, ValueError) as e:    # UnicodeError is a ValueError
+                print(f"WS: re-sending a {payload.get('type')!r} message after "
+                      f"{type(e).__name__}: {e}")
+                await websocket.send_json(_ws_safe(payload))
+
         async def _sender():
             while True:
                 payload = await out_q.get()
                 try:
                     if payload is None:            # flush sentinel
                         return
-                    await websocket.send_json(payload)
+                    try:
+                        await _send(payload)
+                    except (TypeError, ValueError) as e:
+                        # Even the cleaned copy failed: drop this one message,
+                        # never the stream.
+                        print(f"WS: dropped a {payload.get('type')!r} message "
+                              f"({type(e).__name__}: {e})")
+                        continue
                     if _dropped["n"] and out_q.empty():
                         n, _dropped["n"] = _dropped["n"], 0
                         await websocket.send_json({
                             "type": "log",
                             "message": f"⚠️ {n} log line(s) dropped — output outran the connection.",
                         })
-                except Exception:
-                    return                          # socket gone; stop sending
+                except Exception as e:
+                    # The socket itself is gone. Say so: this used to stop
+                    # silently, leaving no trace on the server of why a run
+                    # "lost its connection".
+                    print(f"WS: sender stopped, socket closed "
+                          f"({type(e).__name__}: {e})")
+                    return
                 finally:
                     out_q.task_done()
 

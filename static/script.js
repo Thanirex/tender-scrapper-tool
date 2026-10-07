@@ -578,12 +578,20 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         ws.onerror = () => { alert('Connection lost.'); resetStartBtn(); };
-        ws.onclose = () => {
+        ws.onclose = (ev) => {
             // Only a close that happens MID-RUN is a problem — after a
             // "complete" message the badge is no longer "Running" and the
             // server closing the socket is normal.
             if (statusBadge.textContent === 'Running') {
-                alert('The connection to the server was lost before the run finished. Please try again.');
+                // The close code says who ended it: 1000 = the server finished
+                // without sending "complete", 1006 = dropped with no close at
+                // all (network, proxy, or the server process restarting),
+                // 1011 = server error or its keepalive ping went unanswered,
+                // 1012 = server restarting. Shown so a report can be traced.
+                const why = `code ${ev.code}${ev.reason ? ', ' + ev.reason : ''}`;
+                console.warn(`[scrape] socket closed mid-run (${why})`);
+                appendLog(`⚠️ Connection closed mid-run (${why})`);
+                alert(`The connection to the server was lost before the run finished. Please try again.\n\n(${why})`);
                 resetStartBtn();
             }
         };

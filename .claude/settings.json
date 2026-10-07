@@ -8,7 +8,13 @@
       "Bash(python test_job_bucket.py)",
       "Bash(python test_job_gate.py)",
       "Bash(python ungm_capture.py)",
-      "Bash(python -m py_compile agents/ungm_scraper_agent.py)"
+      "Bash(python -m py_compile agents/ungm_scraper_agent.py)",
+      "Bash(python ungm_diag.py)",
+      "Bash(curl -s --max-time 30 \"https://www.ungm.org/robots.txt\")",
+      "Bash(python ungm_requests_probe.py)",
+      "WebSearch",
+      "WebFetch(domain:www.ungm.org)",
+      "WebFetch(domain:help.ungm.org)"
     ]
   }
 }
