@@ -12,7 +12,7 @@ from typing import Optional
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, Request
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect, Query, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.background import BackgroundTask
@@ -22,7 +22,7 @@ from agents.scraper_agent import ScraperAgent
 from agents.summarizer_agent import SummarizerAgent
 from paths import APP_DIR, OUTPUTS_DIR, DOWNLOADS_DIR, DB_PATH, init as _init_paths
 from db import TenderDB
-from auth import decode_token, hash_password
+from auth import decode_token, get_current_user, hash_password
 from date_utils import now_ist_naive
 from run_stats import RunStatsCollector
 
@@ -1842,6 +1842,91 @@ def _ws_safe(obj):
     return obj
 
 
+# ── Manual runs outlive their socket ───────────────────────────────────────
+# A manual run executes in its own thread and saves each tender as it goes, so
+# it finishes on the server even when the browser's socket is cut (a proxy
+# timing out, a laptop sleeping, a network change). The page used to report
+# that as "connection lost, please try again" and the finished run was
+# abandoned. It now asks /scrape/session/<id> and picks the run back up.
+#
+# session_id -> {"stats": RunStatsCollector, "total_keywords": int, "alive": bool}
+# "alive" is cleared by the run's own thread as its very last act, so it is
+# the one reliable signal that this process is still working on the session.
+_manual_runs: dict = {}
+_MANUAL_RUNS_KEPT = 50
+
+
+def _register_manual_run(session_id: int, stats, total_keywords: int) -> dict:
+    run = {"stats": stats, "total_keywords": total_keywords, "alive": True}
+    _manual_runs[session_id] = run
+    # Finished runs are kept briefly so a late poll still gets its summary.
+    for sid in [s for s, r in _manual_runs.items() if not r["alive"]]:
+        if len(_manual_runs) <= _MANUAL_RUNS_KEPT:
+            break
+        _manual_runs.pop(sid, None)
+    return run
+
+
+@app.get("/scrape/session/{session_id}")
+def scrape_session_status(session_id: int, user: dict = Depends(get_current_user)):
+    """Where a manual run stands — used by the page after its socket drops."""
+    sess = _db.get_session(session_id)
+    if not sess:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+
+    is_owner   = str(sess["user_id"]) == str(user.get("sub"))
+    team_admin = (user.get("role") in ("admin", "superadmin")
+                  and (sess.get("team_id") or "cnk") == user.get("team_id", "cnk"))
+    if not (is_owner or team_admin):
+        return JSONResponse({"error": "Not your session"}, status_code=403)
+
+    run    = _manual_runs.get(session_id)
+    alive  = bool(run and run["alive"])
+    status = sess["status"]
+    interrupted = False
+    if alive:
+        # The thread marks the session complete a moment before it records the
+        # ZIP name. Until the thread is truly done the run is still "running",
+        # or a poll landing in that gap would finish without its download.
+        status = "running"
+    elif status == "running":
+        # The database says running but no thread here owns it: the server
+        # process restarted mid-run. Nothing will ever finish this session.
+        interrupted = True
+        status = "failed"
+        _db.update_session_status(session_id, "failed")
+
+    tenders = []
+    for r in _db.get_session_tenders(session_id):
+        try:
+            fields = json.loads(r.get("summary_json") or "{}")
+        except Exception:
+            fields = {}
+        tenders.append({
+            "keyword":    r.get("keyword") or "",
+            "title":      r.get("title") or "Unknown",
+            "url":        r.get("url") or "",
+            "site":       r.get("site") or "",
+            "fields":     {k: str(v) for k, v in fields.items()},
+            "tender_dir": r.get("tender_dir") or "",
+        })
+
+    progress = summary = None
+    if run:
+        progress = run["stats"].snapshot()
+        progress["total_keywords"] = run["total_keywords"]
+        summary = run["stats"].to_dict()
+
+    return {
+        "status":      status,            # running | complete | failed
+        "interrupted": interrupted,
+        "zip":         sess.get("zip_filename") or None,
+        "tenders":     tenders,
+        "progress":    progress,
+        "summary":     summary,
+    }
+
+
 @app.websocket("/ws/scrape")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -1964,6 +2049,9 @@ async def websocket_endpoint(
         # Create session and track tenders per keyword
         session_id     = _db.create_session(user_id, site_key, team_id=team_id)
         keyword_counts: dict[str, int] = {}
+        # Told to the page first thing: it is what lets the page find this
+        # run again if the socket is cut.
+        _emit({"type": "session", "id": session_id})
 
         def result_cb(record):
             stats.record_saved()
@@ -2159,6 +2247,10 @@ async def websocket_endpoint(
                 # Partial report card — show what was covered before the crash
                 _emit({"type": "summary", "data": stats.to_dict()})
                 _emit({"type": "error", "message": err_repr})
+            finally:
+                # Last act of the run's own thread — after the session status
+                # and the ZIP name are both stored.
+                run_info["alive"] = False
 
         _db.log_activity(user_id, username, "scrape_start",
                          details={"site": site_key, "keywords": keywords})
@@ -2181,6 +2273,10 @@ async def websocket_endpoint(
 
         sender_task    = asyncio.create_task(_sender())
         keepalive_task = asyncio.create_task(_keepalive())
+        # Registered at the last moment before the thread starts, and with no
+        # await since create_session: a status poll cannot run in between, and
+        # a failure before this line leaves no entry claiming a live run.
+        run_info = _register_manual_run(session_id, stats, len(keywords))
         try:
             await asyncio.to_thread(run_scrape)
         finally:

@@ -586,6 +586,21 @@ class TenderDB:
                 (status, session_id),
             )
 
+    def get_session(self, session_id: int) -> "dict | None":
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM search_sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+
+    def get_session_tenders(self, session_id: int) -> "list[dict]":
+        """Tenders a manual run has saved so far, oldest first."""
+        with self._connect() as conn:
+            return conn.execute(
+                """SELECT keyword, title, url, site, summary_json, tender_dir
+                   FROM found_tenders WHERE session_id = ? ORDER BY id ASC""",
+                (session_id,),
+            ).fetchall()
+
     def update_session_zip(self, session_id: int, zip_filename: str):
         with self._connect() as conn:
             conn.execute(

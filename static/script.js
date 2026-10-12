@@ -503,10 +503,15 @@ document.addEventListener('DOMContentLoaded', () => {
             ws.send(JSON.stringify(payload));
         };
 
+        // The server's id for this run. It is what lets the page find the run
+        // again if the socket is cut — the run itself carries on regardless.
+        let sessionId = null;
+
         ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
 
             if (msg.type === 'ping') return; // server keepalive — ignore
+            if (msg.type === 'session') { sessionId = msg.id; return; }
 
             if (msg.type === 'log') {
                 const raw = msg.message;
@@ -577,24 +582,99 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        ws.onerror = () => { alert('Connection lost.'); resetStartBtn(); };
+        // An error is always followed by a close, and the close handler is the
+        // one place that decides what a lost socket means. Alerting here too
+        // told the user the run was lost before recovery had a chance.
+        ws.onerror = () => { console.warn('[scrape] socket error'); };
         ws.onclose = (ev) => {
             // Only a close that happens MID-RUN is a problem — after a
             // "complete" message the badge is no longer "Running" and the
             // server closing the socket is normal.
-            if (statusBadge.textContent === 'Running') {
-                // The close code says who ended it: 1000 = the server finished
-                // without sending "complete", 1006 = dropped with no close at
-                // all (network, proxy, or the server process restarting),
-                // 1011 = server error or its keepalive ping went unanswered,
-                // 1012 = server restarting. Shown so a report can be traced.
-                const why = `code ${ev.code}${ev.reason ? ', ' + ev.reason : ''}`;
-                console.warn(`[scrape] socket closed mid-run (${why})`);
-                appendLog(`⚠️ Connection closed mid-run (${why})`);
-                alert(`The connection to the server was lost before the run finished. Please try again.\n\n(${why})`);
-                resetStartBtn();
+            if (statusBadge.textContent !== 'Running') return;
+
+            // The close code says who ended it: 1000 = the server finished
+            // without sending "complete", 1006 = dropped with no close at
+            // all (network, proxy, or the server process restarting),
+            // 1011 = server error or its keepalive ping went unanswered,
+            // 1012 = server restarting. Shown so a report can be traced.
+            const why = `code ${ev.code}${ev.reason ? ', ' + ev.reason : ''}`;
+            console.warn(`[scrape] socket closed mid-run (${why})`);
+
+            if (sessionId) {
+                // The run does not need this socket: it is still going on the
+                // server and saving as it goes. Follow it there.
+                appendLog(`⚠️ Connection closed mid-run (${why}) — the run is still going on the server; following it there.`);
+                recoverRun();
+                return;
             }
+            // No session id means the run never started on the server.
+            appendLog(`⚠️ Connection closed before the run started (${why})`);
+            alert(`Could not start the run — the connection to the server was lost. Please try again.\n\n(${why})`);
+            resetStartBtn();
         };
+
+        // Follow a run whose socket was cut. Live log lines are gone with the
+        // socket, but the server still knows the run's progress, its saved
+        // tenders, and when it finishes.
+        async function recoverRun() {
+            const POLL_MS = 5000, MAX_MISSES = 12;      // give up after ~1 min of silence
+            pushThought('Connection dropped — your run is still going on the server. Following it…');
+            let misses = 0;
+
+            while (true) {
+                await new Promise(r => setTimeout(r, POLL_MS));
+
+                let data = null;
+                try {
+                    const res = await authFetch(`/scrape/session/${sessionId}`);
+                    if (res === null) return;               // logged out — authFetch is redirecting
+                    if (res.ok) data = await res.json();
+                } catch { /* server unreachable this round */ }
+
+                if (!data) {
+                    if (++misses >= MAX_MISSES) {
+                        failRun('The server has not answered for a minute, so this page cannot tell '
+                              + 'whether the run finished. Check the Dashboard for its results before running it again.');
+                        return;
+                    }
+                    continue;
+                }
+                misses = 0;
+
+                // The server's list is the truth: it holds every tender saved,
+                // including any found while this page was disconnected.
+                allResults = data.tenders || [];
+                foundCount = allResults.length;
+                if (data.progress) updateLivePanel(data.progress, siteLabel);
+                if (data.summary)  runSummaryStats = data.summary;
+
+                if (data.status === 'complete') {
+                    appendLog('✅ Run finished on the server — results recovered.');
+                    finishRun(data.zip);
+                    return;
+                }
+                if (data.status === 'failed') {
+                    failRun(data.interrupted
+                        ? 'The server restarted while this run was in progress, so it could not finish. '
+                          + `${foundCount} tender(s) saved before that are on the Dashboard. Please run it again.`
+                        : 'The run failed on the server. Please try again.');
+                    return;
+                }
+                pushThought(`Still running on the server — ${foundCount} found so far…`);
+            }
+        }
+
+        function failRun(message) {
+            livePanel?.classList.remove('active');
+            statusBadge.className = 'status-badge';
+            statusBadge.style.background = 'var(--danger)';
+            statusBadge.style.color = 'white';
+            statusBadge.textContent = 'Failed';
+            appendLog(`❌ ${message}`);
+            pushThought('Something went wrong — please try again.');
+            setTimeout(() => alert(message), 100);
+            resetStartBtn();
+        }
 
         function finishRun(zipFilename) {
             hideNotif();
