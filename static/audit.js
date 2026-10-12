@@ -115,9 +115,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
             case 'scrape_start': {
                 const kws = Array.isArray(d.keywords) ? d.keywords.join(', ') : d.keywords;
+                // An abbreviated entry keeps the total and the first few keywords.
+                const what = d.truncated && d.keywords_count
+                    ? ` for ${d.keywords_count} keywords` + (kws ? ` (${t(kws + ', …')})` : '')
+                    : (kws ? ` for keywords ${t(kws)}` : '');
                 return { label: 'Scrape', cls: 'action-scrape',
-                         text: `Started a manual scrape on ${_esc((d.site || '?').toUpperCase())}`
-                               + (kws ? ` for keywords ${t(kws)}` : '') };
+                         text: `Started a manual scrape on ${_esc((d.site || '?').toUpperCase())}${what}` };
             }
 
             case 'taiq_run':

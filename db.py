@@ -32,6 +32,34 @@ def _tender_type_of(summary: dict) -> str:
     return "job" if str(summary.get(_JOB_FIELD, "")).strip().lower() == "yes" else "tender"
 
 
+def _compact_details(details: dict, limit: int = 240) -> str:
+    """Smallest useful JSON form of an audit entry's details, within `limit` chars.
+
+    Lists keep their size and first three items, long strings are clipped, and
+    the result is flagged so the audit page can say it is abbreviated. 240
+    fits a VARCHAR(255), the narrowest column this is likely to meet.
+    """
+    out = {}
+    for k, v in (details or {}).items():
+        if isinstance(v, (list, tuple, set)):
+            v = list(v)
+            out[f"{k}_count"] = len(v)
+            out[k] = v[:3]
+        elif isinstance(v, dict):
+            out[k] = v if len(json.dumps(v)) <= 60 else f"{len(v)} item(s)"
+        elif isinstance(v, str) and len(v) > 60:
+            out[k] = v[:57] + "..."
+        else:
+            out[k] = v
+    out["truncated"] = True
+    blob = json.dumps(out)
+    if len(blob) <= limit:
+        return blob
+    blob = json.dumps({k: v for k, v in out.items()
+                       if k.endswith("_count") or k == "truncated"})
+    return blob if len(blob) <= limit else '{"truncated": true}'
+
+
 # ── Database backend detection ─────────────────────────────────────────────────
 #
 # Set DATABASE_URL in .env to switch backends:
@@ -226,6 +254,32 @@ class TenderDB:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {defn}")
             except sqlite3.OperationalError:
                 pass  # column already exists
+
+    def _widen_to_text(self, conn: _Conn, table: str, col: str):
+        """MySQL only: bring a too-narrow free-text column up to TEXT.
+
+        This schema declares these columns TEXT, but a production table was
+        found with a narrower one — a run over all keywords overflowed
+        activity_logs.details_json and died on its audit entry. Only a column
+        that really is narrow is touched; widening keeps every stored value.
+        Never fatal: without ALTER rights the statement to run is logged.
+        """
+        if not _IS_MYSQL:
+            return
+        try:
+            row = conn.execute(
+                "SELECT DATA_TYPE AS t, CHARACTER_MAXIMUM_LENGTH AS n "
+                "FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+                (table, col),
+            ).fetchone()
+            kind = (row.get("t") or "").lower() if row else ""
+            if kind in ("varchar", "char", "tinytext"):
+                conn.execute(f"ALTER TABLE {table} MODIFY {col} TEXT")
+                print(f"DB: widened {table}.{col} from {kind}({row.get('n')}) to TEXT")
+        except Exception as e:
+            print(f"DB: could not widen {table}.{col} ({type(e).__name__}: {e}). "
+                  f"Run by hand: ALTER TABLE {table} MODIFY {col} TEXT;")
 
     def _idx(self, conn: _Conn, unique: bool, name: str, table: str,
              col: str, prefix: int = 0):
@@ -468,6 +522,15 @@ class TenderDB:
                 )
             """)
             self._idx(conn, False, "idx_tender_comments_t", "tender_comments", "tender_id")
+
+            # ── Free-text JSON columns must really be TEXT ─────────────────
+            # Each holds JSON whose size grows with the run (keyword lists,
+            # Level 1 fields, per-site stats). A narrow one fails the write.
+            for _t, _c in (("activity_logs", "details_json"),
+                           ("found_tenders", "summary_json"),
+                           ("cron_tenders",  "summary_json"),
+                           ("cron_runs",     "stats_json")):
+                self._widen_to_text(conn, _t, _c)
 
             # ── Retroactive repair: sync cron_tenders.team_id with parent cron_runs.team_id ──
             conn.execute("""
@@ -1181,15 +1244,35 @@ class TenderDB:
 
     def log_activity(self, user_id: int, username: str, action: str,
                      details: dict = None, ip_address: str = None):
+        """Record an audit entry. Never raises.
+
+        An audit entry must not be able to take down the action it records. In
+        production the details column turned out narrower than this schema
+        defines, so a manual run over all keywords failed on its "scrape_start"
+        entry (MySQL 1406, data too long) and the run died before it began.
+        If the full details do not fit, a compact form is stored instead; if
+        even that fails the entry is dropped with a line in the server log.
+        """
         now = now_ist_naive().isoformat(timespec="seconds")
-        with self._connect() as conn:
-            conn.execute(
-                """INSERT INTO activity_logs
-                   (user_id, username, action, details_json, ip_address, timestamp)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (user_id, username, action,
-                 json.dumps(details or {}), ip_address, now),
-            )
+        err = None
+        for attempt, blob in enumerate((json.dumps(details or {}),
+                                        _compact_details(details))):
+            try:
+                with self._connect() as conn:
+                    conn.execute(
+                        """INSERT INTO activity_logs
+                           (user_id, username, action, details_json, ip_address, timestamp)
+                           VALUES (?, ?, ?, ?, ?, ?)""",
+                        (user_id, username, action, blob, ip_address, now),
+                    )
+                if attempt:
+                    print(f"activity_logs: '{action}' stored with compact details "
+                          f"({type(err).__name__}: {err})")
+                return
+            except Exception as e:
+                err = e
+        print(f"activity_logs: could NOT record '{action}' by {username!r} "
+              f"({type(err).__name__}: {err})")
 
     def get_activity_logs(self, page: int = 1, limit: int = 50,
                           user_id: int = None) -> dict:

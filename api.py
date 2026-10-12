@@ -1949,6 +1949,11 @@ async def websocket_endpoint(
         await websocket.close()
         return
 
+    # Known to the handler's own except-blocks, so a failure during setup can
+    # be told apart from one after the run's thread has taken over.
+    session_id  = None
+    run_started = False
+
     try:
         data        = await websocket.receive_json()
         site_key    = data.get("site")
@@ -2277,6 +2282,7 @@ async def websocket_endpoint(
         # await since create_session: a status poll cannot run in between, and
         # a failure before this line leaves no entry claiming a live run.
         run_info = _register_manual_run(session_id, stats, len(keywords))
+        run_started = True
         try:
             await asyncio.to_thread(run_scrape)
         finally:
@@ -2294,4 +2300,23 @@ async def websocket_endpoint(
     except WebSocketDisconnect:
         print("Client disconnected")
     except Exception as e:
-        print(f"WS Error: {e}")
+        import traceback
+        print(f"WS Error: {type(e).__name__}: {e}")
+        traceback.print_exc()
+        if not run_started:
+            # Setup failed, so no thread will ever finish this session or tell
+            # the page anything. Returning here used to close the socket with
+            # no word: the page reported a lost connection, the session stayed
+            # "running" forever, and the real error sat only in the server log.
+            if session_id is not None:
+                try:
+                    _db.update_session_status(session_id, "failed")
+                except Exception:
+                    pass
+            try:
+                await websocket.send_json(_ws_safe({
+                    "type": "error",
+                    "message": f"The run could not start ({type(e).__name__}: {e})",
+                }))
+            except Exception:
+                pass                    # socket already gone
