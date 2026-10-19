@@ -354,6 +354,8 @@ def _run_daily_job_locked(team_id: str):
             keywords_done += 1
             _db.update_cron_run(run_id, keywords_done=keywords_done)
 
+    _driver_hint_shown = {"done": False}
+
     def _run_step_safely(label: str, fn):
         """Run one site/keyword scrape step. A crash in one site must not
         abort the whole daily run — log it and move on to the next step.
@@ -364,6 +366,17 @@ def _run_daily_job_locked(team_id: str):
             msg = f"{type(step_err).__name__}: {step_err}"
             _write_log(f"  ❌ {label} scrape error: {msg} — continuing with next step")
             logger.error(f"[TAiQ Cron] {label} scrape error: {msg}")
+            # Playwright's driver process started and died before it was ready.
+            # Playwright then fails on its own missing attribute, which hides
+            # the cause — say it plainly, once per run.
+            if (isinstance(step_err, AttributeError) and "PlaywrightContextManager" in msg
+                    and not _driver_hint_shown["done"]):
+                _driver_hint_shown["done"] = True
+                hint = ("Playwright's browser driver died on startup — the server is "
+                        "most likely out of memory or process slots, so no browser-based "
+                        "site can run until the container is restarted.")
+                _write_log(f"   ↳ {hint}")
+                logger.error(f"[TAiQ Cron] {hint}")
 
     try:
         # ── Phase 1: UNGM ──────────────────────────────────────────────────────

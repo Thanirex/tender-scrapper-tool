@@ -1,6 +1,11 @@
 services:
   taiq:
     build: .
+    # Run a tiny init as PID 1. Without it uvicorn is PID 1 and never reaps the
+    # browser processes Playwright leaves behind; over days they pile up until
+    # Playwright's driver cannot start ("'PlaywrightContextManager' object has
+    # no attribute '_playwright'"). Playwright's Docker guide requires this.
+    init: true
     ports:
       - "8001:8001"
     env_file:
