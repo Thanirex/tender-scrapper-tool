@@ -1429,6 +1429,73 @@ def _run_mercycorps_scrape(site_key: str, keywords: list, log_cb,
     return tender_dirs
 
 
+# ── Green Climate Fund procurement scraper ───────────────────────────────
+
+def _run_gcf_scrape(site_key: str, keywords: list, log_cb,
+                    result_cb=None, team_id: str = "cnk") -> list[Path] | None:
+    from agents.gcf_scraper_agent import (
+        GreenClimateFundScraperAgent, build_combined_text, MAX_COMBINED_CHARS,
+    )
+    from agents.file_reader import read_file
+    from agents.excel_writer import write_level1_report
+
+    agent      = GreenClimateFundScraperAgent()
+    summarizer = SummarizerAgent()
+    timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
+    run_dir    = DOWNLOADS_DIR / site_key / timestamp
+    tender_dirs: list[Path] = []
+
+    log_cb("🚀 Starting Green Climate Fund Procurement Scraper...")
+
+    def on_result_ready(res):
+        title = res.get("title", "Unknown")
+        log_cb(f"📊 Summarizing: {title[:55]}...")
+
+        combined = build_combined_text(res, read_file, log_cb)
+        fields   = summarizer.summarize_level1(
+            combined, log_callback=log_cb, max_chars=MAX_COMBINED_CHARS
+        )
+
+        tender_dir = Path(res.get("tender_dir", str(run_dir)))
+        safe_title = re.sub(r'[\\/*?:"<>|]', "_", title)[:40].strip("_. ")
+        excel_path = str(tender_dir / f"Level1_{safe_title}.xlsx")
+
+        record = {
+            "keyword":    res.get("keyword", ""),
+            "title":      title,
+            "url":        res.get("url", ""),
+            "site":       site_key,
+            "fields":     fields,
+            "files":      res.get("files", []),
+            "tender_dir": res.get("tender_dir", ""),
+        }
+        write_level1_report([record], excel_path)
+        tender_dirs.append(tender_dir)
+        if result_cb:
+            result_cb(record)
+        _log_level1_saved(log_cb, excel_path, fields)
+
+    for kw in keywords:
+        log_cb(f"▶️ Processing keyword: {kw}")
+        agent.search(
+            kw,
+            output_dir=str(run_dir),
+            log_callback=log_cb,
+            on_result_ready=on_result_ready,
+            db=_db,
+            team_id=team_id,
+        )
+
+    if not tender_dirs:
+        log_cb("ℹ️ Run finished — nothing new to save. Everything listed was either "
+               "closed for bids, already collected in an earlier run, "
+               "or didn't match your keywords.")
+        return None
+
+    log_cb(f"✅ Done. {len(tender_dirs)} tender(s) saved.")
+    return tender_dirs
+
+
 # ── ACBF scraper (list-based, page-content-only) ──────────────────────────
 
 def _run_acbf_scrape(site_key: str, keywords: list, log_cb,
@@ -2215,6 +2282,12 @@ async def websocket_endpoint(
                         zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
                 elif _scraper_type == "mercycorps":
                     result = _run_mercycorps_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
+                    if result:
+                        log_cb("📦 Packaging all results into ZIP...")
+                        base = DOWNLOADS_DIR / site_key
+                        zip_path = _make_run_zip(result, base, f"{site_key}_{ts}")
+                elif _scraper_type == "gcf":
+                    result = _run_gcf_scrape(site_key, keywords, log_cb, result_cb, team_id=team_id)
                     if result:
                         log_cb("📦 Packaging all results into ZIP...")
                         base = DOWNLOADS_DIR / site_key

@@ -163,5 +163,11 @@
         "scraper_type": "mercycorps",
         "display_name": "Mercy Corps Tenders (RFPs)",
         "skip_date_filter": true
+    },
+    "gcf": {
+        "url": "https://iaayou.fa.ocs.oraclecloud.com/fscmUI/faces/NegotiationAbstracts?prcBuId=300000003621906",
+        "scraper_type": "gcf",
+        "display_name": "Green Climate Fund (GCF) Procurement",
+        "skip_date_filter": true
     }
 }
