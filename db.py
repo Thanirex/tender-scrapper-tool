@@ -442,6 +442,10 @@ class TenderDB:
             self._add_col(conn, "cron_runs", "log_file",        "TEXT")
             # Per-run report card (JSON from run_stats.RunStatsCollector)
             self._add_col(conn, "cron_runs", "stats_json",      "TEXT")
+            # Resume bookkeeping (sites finished / hung, restart count) so a
+            # run interrupted by a server restart continues instead of being
+            # lost — see cron_runner._resume_interrupted_run.
+            self._add_col(conn, "cron_runs", "progress_json",   "TEXT")
             self._idx(conn, False, "idx_cron_runs_date", "cron_runs", "run_date", prefix=10)
 
             # ── TAiQ cron tenders ──────────────────────────────────────────
@@ -529,7 +533,8 @@ class TenderDB:
             for _t, _c in (("activity_logs", "details_json"),
                            ("found_tenders", "summary_json"),
                            ("cron_tenders",  "summary_json"),
-                           ("cron_runs",     "stats_json")):
+                           ("cron_runs",     "stats_json"),
+                           ("cron_runs",     "progress_json")):
                 self._widen_to_text(conn, _t, _c)
 
             # ── Retroactive repair: sync cron_tenders.team_id with parent cron_runs.team_id ──
@@ -1311,7 +1316,7 @@ class TenderDB:
     def update_cron_run(self, run_id: int, **kwargs):
         allowed = {"status", "finished_at", "keywords_done", "total_tenders",
                    "error_msg", "total_keywords", "current_keyword",
-                   "stop_requested", "log_file", "stats_json"}
+                   "stop_requested", "log_file", "stats_json", "progress_json"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return
@@ -1613,15 +1618,28 @@ class TenderDB:
             }
         }
 
-    def mark_stale_runs_failed(self) -> int:
+    def get_running_cron_runs(self) -> "list[dict]":
+        """Rows still marked 'running' — newest first."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT * FROM cron_runs WHERE status = 'running' ORDER BY id DESC"
+            ).fetchall()
+
+    def mark_stale_runs_failed(self, keep_id: "int | None" = None) -> int:
+        """Fail every run left 'running' by a previous process.
+
+        keep_id is spared: it is the run the startup check is resuming.
+        """
         now = now_ist_naive().isoformat(timespec="seconds")
         with self._connect() as conn:
-            cur = conn.execute(
-                """UPDATE cron_runs
+            q = """UPDATE cron_runs
                    SET status='failed', finished_at=?, error_msg='Server restarted mid-run'
-                   WHERE status='running'""",
-                (now,),
-            )
+                   WHERE status='running'"""
+            params: list = [now]
+            if keep_id is not None:
+                q += " AND id != ?"
+                params.append(keep_id)
+            cur = conn.execute(q, params)
             return cur.rowcount
 
     def request_cron_stop(self, run_id: int):

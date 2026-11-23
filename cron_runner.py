@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import time
 import logging
@@ -20,21 +21,36 @@ _stop_event     = threading.Event()
 _claim_lock     = threading.Lock()
 _current_run_id: "int | None" = None
 _current_team_id: "str | None" = None
+_current_run_date: "str | None" = None   # IST date (YYYY-MM-DD) the active run belongs to
 _stats          = None   # run_stats.RunStatsCollector for the active run
+_progress: "dict | None" = None   # resume bookkeeping for the active run (cron_runs.progress_json)
 
 # ── Stall watchdog ─────────────────────────────────────────────────────────
 # A scrape can wedge inside a third-party call (a pathological PDF, a hung
 # browser, an unresponsive host). Python cannot kill the thread doing it, so
-# instead the run is given a generation number: if it stops reporting progress
-# for _STALL_SECONDS the run is declared dead, its slot is released so the next
-# run can start, and any output the zombie thread produces later is dropped
-# because its generation no longer matches. Recovering no longer needs a
-# container restart.
+# the run is given a generation number. A background ticker checks every
+# minute; if the run stops reporting progress for _STALL_SECONDS it is
+# declared dead and recovered:
+#
+#   • In Docker (the production server) the process exits on purpose and
+#     Docker's restart policy brings the container back with a clean browser
+#     and freed memory. On startup the interrupted run is resumed from the
+#     next site, skipping the one that hung.
+#   • Elsewhere (local dev) nothing would restart the process, so the slot is
+#     released and the run resumes in a new thread instead.
+#
+# A run is resumed at most _MAX_RESUMES times so one bad site cannot loop.
+# Any output a zombie thread produces later is dropped because its generation
+# no longer matches (see _check_stop and _RunScopedDB).
 _run_generation  = 0
 _active_gen: "int | None" = None      # generation that currently owns run state
 _last_progress   = 0.0                # time.monotonic() of the last log line
-_STALL_SECONDS   = 25 * 60
+_STALL_SECONDS   = 30 * 60
+_WATCHDOG_TICK   = 60                 # seconds between background stall checks
+_MAX_RESUMES     = 3
+_RESTART_EXIT_CODE = 75               # distinct code so a stall restart is recognisable in `docker ps -a`
 _thread_state    = threading.local()  # carries the owning generation per thread
+_in_server       = False              # True once init_scheduler() ran (API process, not cron_runner_tmi.py)
 
 # ── Per-run log buffer ─────────────────────────────────────────────────────
 _log_buffer:    list = []
@@ -59,44 +75,231 @@ def request_stop():
 def _check_stop():
     if _stop_event.is_set():
         raise _StopRequested("Stop requested by superadmin")
+    # A run the watchdog already gave up on must not carry on scraping if its
+    # blocked call ever returns — a newer run may own the state by now.
+    gen = getattr(_thread_state, "gen", None)
+    if gen is not None and gen != _active_gen:
+        raise _StopRequested("Run was declared stalled — standing down")
+
+
+class _RunScopedDB:
+    """The DB handle one run uses. Every call is refused (by raising
+    _StopRequested) once that run has lost ownership to the watchdog, so a
+    zombie thread can never save tenders or mark them as seen — which would
+    hide them from the run that replaced it."""
+
+    def __init__(self, db, gen: int):
+        self._db  = db
+        self._gen = gen
+
+    def __getattr__(self, name):
+        attr = getattr(self._db, name)
+        if not callable(attr):
+            return attr
+
+        def guarded(*args, **kwargs):
+            if self._gen != _active_gen:
+                raise _StopRequested("Run was declared stalled — standing down")
+            return attr(*args, **kwargs)
+        return guarded
+
+
+def _load_progress(row: "dict | None") -> dict:
+    """Parse cron_runs.progress_json into a complete progress dict."""
+    progress: dict = {}
+    try:
+        progress = json.loads((row or {}).get("progress_json") or "{}") or {}
+    except Exception:
+        progress = {}
+    progress.setdefault("done_sites", [])
+    progress.setdefault("hung_sites", [])
+    progress.setdefault("current_site", "")
+    progress.setdefault("resumes", 0)
+    return progress
+
+
+def _self_restart_enabled() -> bool:
+    """Whether a stall may exit the process for Docker to restart.
+
+    Only in the API server (a standalone cron_runner_tmi.py process has
+    nothing to restart it). TAIQ_SELF_RESTART=1/0 forces it; otherwise it is
+    on inside a Docker container and off everywhere else.
+    """
+    if not _in_server:
+        return False
+    flag = os.getenv("TAIQ_SELF_RESTART", "").strip().lower()
+    if flag in ("1", "true", "yes", "on"):
+        return True
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return Path("/.dockerenv").exists()
+
+
+def _restart_process(reason: str):
+    """Exit now so Docker's restart policy starts a fresh container.
+
+    os._exit is deliberate: a graceful shutdown would wait on the very thread
+    that is wedged. Everything worth keeping is already in the DB / log file.
+    """
+    logger.critical(
+        f"[TAiQ Cron] {reason} — exiting (code {_RESTART_EXIT_CODE}) so Docker "
+        f"restarts the container with a clean slate."
+    )
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except Exception:
+            pass
+    for handler in logging.getLogger().handlers:
+        try:
+            handler.flush()
+        except Exception:
+            pass
+    os._exit(_RESTART_EXIT_CODE)
+
+
+def _append_log_file(path: "str | None", msg: str):
+    """Write one line straight to a run's log file (used off the run thread)."""
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"[{now_ist_naive().strftime('%H:%M:%S')}] {msg}\n")
+    except Exception:
+        pass
+
+
+def _release_slot():
+    """Drop ownership of the run state. Caller must hold _claim_lock."""
+    global _current_run_id, _current_team_id, _current_run_date, _stats, _progress, _active_gen
+    # Clearing the generation is what makes the old thread's writes bounce.
+    _active_gen        = None
+    _current_run_id    = None
+    _current_team_id   = None
+    _current_run_date  = None
+    _stats             = None
+    _progress          = None
 
 
 def _reap_if_stalled() -> "int | None":
-    """Release the run slot if the owning run has gone silent.
+    """Recover the active run if it has gone silent for _STALL_SECONDS.
 
-    Returns the reaped run id, or None. Safe to call from any thread: it only
-    touches bookkeeping, never the wedged worker.
+    Returns the recovered run id, or None. Safe to call from any thread: it
+    only touches bookkeeping, never the wedged worker. In Docker it does not
+    return — the process exits and the run resumes after the restart.
     """
-    global _current_run_id, _current_team_id, _stats, _active_gen
-
     with _claim_lock:
         if _active_gen is None or _current_run_id is None:
             return None
-        if time.monotonic() - _last_progress < _STALL_SECONDS:
+        idle = time.monotonic() - _last_progress
+        if idle < _STALL_SECONDS:
             return None
         stuck_id, stuck_team = _current_run_id, _current_team_id
-        # Bump past the stuck generation so its thread can no longer write.
-        _active_gen      = None
-        _current_run_id  = None
-        _current_team_id = None
-        _stats           = None
+        log_path = _log_file_path
+        _release_slot()
 
-    mins = int((time.monotonic() - _last_progress) // 60)
-    logger.error(
-        f"[TAiQ Cron] Run #{stuck_id} ({stuck_team}) produced no output for "
-        f"{mins} minutes — declaring it stalled and releasing the run slot."
-    )
+    mins = int(idle // 60)
+    try:
+        row = _db.get_cron_run(stuck_id)
+    except Exception as e:
+        logger.error(f"[TAiQ Cron] Could not read stalled run #{stuck_id}: {e}")
+        row = None
+    progress   = _load_progress(row)
+    stuck_site = progress.get("current_site") or ""
+    if stuck_site and stuck_site not in progress["hung_sites"]:
+        progress["hung_sites"].append(stuck_site)
+    progress["current_site"] = ""
+    site_label = stuck_site.upper() or "the run"
+    give_up    = progress["resumes"] >= _MAX_RESUMES
+
+    if give_up:
+        note = (f"⏱ {site_label} produced no output for {mins} minutes and the run has already "
+                f"been resumed {progress['resumes']} time(s) — giving up on today's run.")
+        update = dict(status="failed",
+                      finished_at=now_ist_naive().isoformat(timespec="seconds"),
+                      current_keyword="",
+                      error_msg=f"Stalled on {site_label} after {progress['resumes']} resume(s) — gave up.")
+    else:
+        note = (f"⏱ {site_label} produced no output for {mins} minutes — restarting and "
+                f"resuming the run from the next site.")
+        update = dict(current_keyword="")   # stays 'running' so it is resumed
+    update["progress_json"] = json.dumps(progress)
+
+    logger.error(f"[TAiQ Cron] Run #{stuck_id} ({stuck_team}): {note}")
+    _append_log_file(log_path, note)
+    try:
+        _db.update_cron_run(stuck_id, **update)
+    except Exception as e:
+        logger.error(f"[TAiQ Cron] Could not record stall of run #{stuck_id}: {e}")
+
+    if _self_restart_enabled():
+        _restart_process(f"Run #{stuck_id} stalled on {site_label}")
+    elif not give_up:
+        threading.Thread(
+            target=run_daily_job, args=(stuck_team or "cnk",),
+            kwargs={"resume_run_id": stuck_id},
+            daemon=True, name=f"taiq-resume-{stuck_team}",
+        ).start()
+    return stuck_id
+
+
+def _supersede_previous_day_run(team_id: str):
+    """Before a scheduled run: if a run from an earlier day still owns the
+    slot, it is stuck in a way the stall watchdog cannot see (e.g. looping
+    while still logging). Close it so today's run happens regardless."""
+    today = now_ist_naive().strftime("%Y-%m-%d")
+    with _claim_lock:
+        if _active_gen is None or _current_run_id is None:
+            return
+        if not _current_run_date or _current_run_date >= today:
+            return
+        old_id, old_team, old_date = _current_run_id, _current_team_id, _current_run_date
+        log_path = _log_file_path
+        _release_slot()
+
+    note = (f"⏱ Run from {old_date} was still going when the {today} run for "
+            f"{team_id.upper()} was due — closing it so the new day's run can start.")
+    logger.error(f"[TAiQ Cron] Run #{old_id} ({old_team}): {note}")
+    _append_log_file(log_path, note)
     try:
         _db.update_cron_run(
-            stuck_id, status="failed",
+            old_id, status="failed",
             finished_at=now_ist_naive().isoformat(timespec="seconds"),
             current_keyword="",
-            error_msg=f"Stalled — no progress for {mins} minutes; run slot released.",
+            error_msg=f"Superseded — still running when the {today} run was due.",
         )
     except Exception as e:
-        logger.error(f"[TAiQ Cron] Could not mark stalled run #{stuck_id} failed: {e}")
-    _stop_event.set()   # ask the zombie to unwind if it ever regains control
-    return stuck_id
+        logger.error(f"[TAiQ Cron] Could not close superseded run #{old_id}: {e}")
+
+    if _self_restart_enabled():
+        # The startup catch-up fires today's run once the container is back.
+        _restart_process(f"Run #{old_id} from {old_date} superseded by today's run")
+
+
+def _scheduled_run(team_id: str):
+    """APScheduler entry point.
+
+    Returns immediately and runs the scrape in its own thread. APScheduler
+    refuses to start a job while a previous call of it is still executing
+    (max_instances=1), so a wedged run used to make every later 7 AM run
+    silently skip until the container was restarted.
+    """
+    _supersede_previous_day_run(team_id)
+    threading.Thread(
+        target=run_daily_job, args=(team_id,), daemon=True,
+        name=f"taiq-scheduled-{team_id}",
+    ).start()
+
+
+def _watchdog_loop():
+    """Check for a stalled run every minute, whether or not anyone is
+    looking at the dashboard."""
+    while True:
+        time.sleep(_WATCHDOG_TICK)
+        try:
+            _reap_if_stalled()
+        except Exception as e:
+            logger.error(f"[TAiQ Cron] Watchdog check failed: {e}")
 
 
 def get_current_run_id() -> "int | None":
@@ -167,6 +370,31 @@ def _reset_log(run_id: int):
         pass
 
 
+_LOG_TS_PREFIX = re.compile(r"^\[\d{2}:\d{2}:\d{2}\] ")
+
+
+def _resume_log(run_id: int, log_file: "str | None") -> list:
+    """Re-open an interrupted run's log WITHOUT truncating it.
+
+    Loads its lines back into the live buffer so the dashboard still shows
+    the whole day, and returns the bare messages so the report card can be
+    rebuilt from them (run_stats is driven purely by log lines).
+    """
+    global _log_buffer, _log_file_path
+    from paths import CRON_LOGS_DIR
+    log_path = Path(log_file) if log_file else CRON_LOGS_DIR / f"run_{run_id}.log"
+    lines: list = []
+    try:
+        if log_path.exists():
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        lines = []
+    with _log_lock:
+        _log_buffer = list(lines)
+    _log_file_path = str(log_path)
+    return [_LOG_TS_PREFIX.sub("", ln) for ln in lines]
+
+
 def _clear_log():
     global _log_file_path
     _log_file_path = None
@@ -194,6 +422,14 @@ def _finalize_stats() -> "str | None":
             f"   🔎 {site.upper()}: {s['listed']} seen → {s['saved']} saved, "
             f"{s['rejected_total']} rejected"
         )
+    # Watchdog recoveries. These lines deliberately avoid the run_stats
+    # marker emoji (⏭ ⏩ 🚫 📅 ⚠️ ❌) so they are never counted as rejections.
+    hung = (_progress or {}).get("hung_sites") or []
+    if hung:
+        _write_log(f"   ⏱ Skipped after they stopped responding: {', '.join(s.upper() for s in hung)}")
+    resumes = (_progress or {}).get("resumes", 0)
+    if resumes:
+        _write_log(f"   🔁 Resumed {resumes} time(s) after a server restart")
     _write_log("═" * 62)
     return json.dumps(data)
 
@@ -223,8 +459,12 @@ def _load_all_keywords(team_id: str = "cnk") -> list:
 
 # ── Main job ───────────────────────────────────────────────────────────────
 
-def run_daily_job(team_id: str = "cnk"):
-    """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team."""
+def run_daily_job(team_id: str = "cnk", resume_run_id: "int | None" = None):
+    """Daily TAiQ cron — scrapes ALL configured sites for all keywords for a given team.
+
+    resume_run_id continues an interrupted run (same run id, same log) from
+    the sites it had not finished, instead of starting a new one.
+    """
     global _run_generation, _active_gen, _last_progress
 
     # Every route into a run (scheduler, catch-up, manual trigger,
@@ -240,9 +480,9 @@ def run_daily_job(team_id: str = "cnk"):
     #
     # Ownership is a generation number rather than a held lock: a lock owned by
     # a wedged worker could never be reclaimed, which is what used to force a
-    # container rebuild.
-    _reap_if_stalled()
-
+    # container rebuild. Stalls are detected by the background watchdog
+    # (_watchdog_loop), not here — recovering from inside this call could start
+    # a resume thread that races this one for the slot.
     with _claim_lock:
         if _active_gen is not None:
             logger.warning(
@@ -257,7 +497,15 @@ def run_daily_job(team_id: str = "cnk"):
 
     _thread_state.gen = gen
     try:
-        _run_daily_job_locked(team_id)
+        _run_daily_job_locked(team_id, gen, resume_run_id)
+    except _StopRequested:
+        # Only reachable by a zombie: a live run handles its own stop inside
+        # _run_daily_job_locked. Its final status write was refused because
+        # the watchdog had already recovered the run.
+        logger.warning(
+            f"[TAiQ Cron] A stalled {team_id} run woke up after being recovered — "
+            f"it stood down without saving anything."
+        )
     finally:
         with _claim_lock:
             # Only release if this run still owns the slot — if the watchdog
@@ -267,9 +515,14 @@ def run_daily_job(team_id: str = "cnk"):
         _thread_state.gen = None
 
 
-def _run_daily_job_locked(team_id: str):
+def _run_daily_job_locked(team_id: str, gen: int, resume_run_id: "int | None" = None):
     """Body of run_daily_job — callers must own the run slot (see _active_gen)."""
-    global _current_run_id, _current_team_id, _stats
+    global _current_run_id, _current_team_id, _current_run_date, _stats, _progress
+
+    # Deliberately shadows the module-level _db for this function and every
+    # callback defined in it: all of this run's DB calls go through a handle
+    # that refuses to write once the watchdog has recovered the run.
+    _db = _RunScopedDB(globals()["_db"], gen)
 
     from paths import DOWNLOADS_DIR, APP_DIR
     from db import CronDBProxy
@@ -313,29 +566,99 @@ def _run_daily_job_locked(team_id: str):
     total_kw    = len(keywords) * num_sites
     site_labels = (["UNGM"] if ungm_enabled else []) + [s.upper() for s in standard_sites]
 
-    run_id          = _db.create_cron_run(total_keywords=total_kw, team_id=team_id)
-    _current_run_id = run_id
-    _current_team_id = team_id
-
     from run_stats import RunStatsCollector
-    _stats = RunStatsCollector()
 
-    _reset_log(run_id)
-    _db.update_cron_run(run_id, log_file=_log_file_path)
+    if resume_run_id is not None:
+        # ── Resume an interrupted run (same id, same log, same date page) ──────
+        row = _db.get_cron_run(resume_run_id)
+        if not row or row.get("status") != "running":
+            logger.warning(
+                f"[TAiQ Cron] Resume of run #{resume_run_id} skipped — it is no longer running."
+            )
+            return
+        run_id           = row["id"]
+        progress         = _load_progress(row)
+        progress["resumes"] += 1
+        # A site still marked current was cut off by a plain restart (deploy,
+        # crash) rather than a stall, so it is scanned again from the start.
+        progress["current_site"] = ""
+        _current_run_id   = run_id
+        _current_team_id  = team_id
+        _current_run_date = row.get("run_date") or now_ist_naive().strftime("%Y-%m-%d")
+        _progress         = progress
 
-    _write_log(
-        f"Run #{run_id} started ({team_id.upper()}) — {len(keywords)} keywords × {num_sites} site(s): "
-        f"{', '.join(site_labels)}"
-    )
-    logger.info(f"[TAiQ Cron] Run #{run_id} ({team_id}) started — {total_kw} keyword/site combinations")
+        # The report card is built from log lines, so replaying the existing
+        # log rebuilds it exactly as it stood before the restart.
+        old_msgs = _resume_log(run_id, row.get("log_file"))
+        _stats   = RunStatsCollector()
+        for m in old_msgs:
+            try:
+                _stats.feed(m)
+            except Exception:
+                pass
+
+        total_tenders = int(row.get("total_tenders") or 0)
+        keywords_done = len(progress["done_sites"]) * len(keywords)
+        _db.update_cron_run(
+            run_id, log_file=_log_file_path, total_keywords=total_kw,
+            keywords_done=keywords_done, progress_json=json.dumps(progress),
+        )
+        skipped = progress["done_sites"] + progress["hung_sites"]
+        _write_log(
+            f"🔁 Run #{run_id} resumed after a server restart "
+            f"(resume {progress['resumes']} of {_MAX_RESUMES})"
+            + (f" — not scanning again: {', '.join(s.upper() for s in skipped)}" if skipped else "")
+        )
+        logger.info(f"[TAiQ Cron] Run #{run_id} ({team_id}) resumed — resume {progress['resumes']}")
+    else:
+        run_id            = _db.create_cron_run(total_keywords=total_kw, team_id=team_id)
+        _current_run_id   = run_id
+        _current_team_id  = team_id
+        _current_run_date = now_ist_naive().strftime("%Y-%m-%d")
+        _progress         = _load_progress(None)
+        _stats            = RunStatsCollector()
+
+        _reset_log(run_id)
+        _db.update_cron_run(run_id, log_file=_log_file_path,
+                            progress_json=json.dumps(_progress))
+
+        _write_log(
+            f"Run #{run_id} started ({team_id.upper()}) — {len(keywords)} keywords × {num_sites} site(s): "
+            f"{', '.join(site_labels)}"
+        )
+        logger.info(f"[TAiQ Cron] Run #{run_id} ({team_id}) started — {total_kw} keyword/site combinations")
+
+        total_tenders = 0
+        keywords_done = 0
+
+    progress = _progress
+
+    def _site_begin(site_key: str):
+        # Persisted before scraping so the watchdog knows which site hung.
+        progress["current_site"] = site_key
+        _db.update_cron_run(run_id, progress_json=json.dumps(progress))
+
+    def _site_end(site_key: str):
+        if site_key not in progress["done_sites"]:
+            progress["done_sites"].append(site_key)
+        progress["current_site"] = ""
+        _db.update_cron_run(run_id, progress_json=json.dumps(progress))
+
+    def _already_handled(site_key: str) -> bool:
+        """On a resumed run: True for a site not to scan again. Finished sites
+        are already listed in the resume line, so only a hung one is logged.
+        Log lines here must avoid the run_stats marker emoji (⏭ ⏩ 🚫 ⚠️ ❌)."""
+        if site_key in progress["done_sites"]:
+            return True
+        if site_key in progress["hung_sites"]:
+            _write_log(f"⏱ {site_key.upper()} skipped — it stopped responding earlier in this run")
+            return True
+        return False
 
     proxy      = CronDBProxy(_db, run_id, team_id=team_id)
     summarizer = SummarizerAgent()
     timestamp  = now_ist_naive().strftime("%Y%m%d_%H%M%S")
     run_dir    = DOWNLOADS_DIR / "cron" / f"cron_{team_id}_{timestamp}"
-
-    total_tenders = 0
-    keywords_done = 0
 
     # ── Shared log callback (used by both UNGM and standard agents) ────────────
     def _progress_log(msg: str):
@@ -381,9 +704,12 @@ def _run_daily_job_locked(team_id: str):
     try:
         # ── Phase 1: UNGM ──────────────────────────────────────────────────────
         ungm_run_dir = run_dir / "ungm"
-        if ungm_enabled:
+        # scan_ungm, not ungm_enabled, decides the scan: ungm_enabled also
+        # fixes the phase numbering of every later site.
+        scan_ungm = ungm_enabled and not _already_handled("ungm")
+        if scan_ungm:
             _write_log(f"🌐 Phase 1 / {num_sites} — UNGM ({len(keywords)} keywords)")
-        else:
+        elif not ungm_enabled:
             _write_log("⏭️ Skipping UNGM — not in this team's sites_config.json.")
 
         def on_ungm_tender_ready(res: dict):
@@ -477,7 +803,8 @@ def _run_daily_job_locked(team_id: str):
             _write_log(f"  ✅ Saved tender #{total_tenders}: {title[:60]}")
             _check_stop()
 
-        if ungm_enabled:
+        if scan_ungm:
+            _site_begin("ungm")
             ungm_agent = UNGMScraperAgent()
             _run_step_safely("UNGM", lambda: ungm_agent.scrape(
                 keywords, str(ungm_run_dir),
@@ -485,6 +812,8 @@ def _run_daily_job_locked(team_id: str):
                 on_tender_ready=on_ungm_tender_ready, db=proxy,
                 team_id=team_id,
             ))
+            if not _stop_event.is_set():
+                _site_end("ungm")
 
         # ── Phase 2+: Standard sites ───────────────────────────────────────────
         if standard_sites and not _stop_event.is_set():
@@ -533,11 +862,14 @@ def _run_daily_job_locked(team_id: str):
             for phase_idx, site_key in enumerate(standard_sites, start=2 if ungm_enabled else 1):
                 if _stop_event.is_set():
                     break
+                if _already_handled(site_key):
+                    continue
 
                 _write_log(
                     f"🌐 Phase {phase_idx} / {num_sites} — "
                     f"{site_key.upper()} ({len(keywords)} keywords)"
                 )
+                _site_begin(site_key)
 
                 scraper_type = sites_cfg.get(site_key, {}).get("scraper_type", "standard")
 
@@ -1877,6 +2209,9 @@ def _run_daily_job_locked(team_id: str):
                     keywords_done += 1
                     _db.update_cron_run(run_id, keywords_done=keywords_done)
 
+                if not _stop_event.is_set():
+                    _site_end(site_key)
+
         # ── Finish ─────────────────────────────────────────────────────────────
         finished_at = now_ist_naive().isoformat(timespec="seconds")
 
@@ -1899,10 +2234,17 @@ def _run_daily_job_locked(team_id: str):
                 f"✅ Run complete — {keywords_done}/{total_kw} keywords, "
                 f"{total_tenders} tenders saved"
             )
+            done_kwargs = {}
+            if progress["hung_sites"]:
+                done_kwargs["error_msg"] = (
+                    "Completed, but skipped after they stopped responding: "
+                    + ", ".join(s.upper() for s in progress["hung_sites"])
+                )
             _db.update_cron_run(
                 run_id, status="complete", finished_at=finished_at,
                 keywords_done=keywords_done, current_keyword="",
                 total_tenders=total_tenders, stats_json=_finalize_stats(),
+                progress_json=json.dumps(progress), **done_kwargs,
             )
             logger.info(
                 f"[TAiQ Cron] Run #{run_id} complete — {total_tenders} tenders found"
@@ -1945,9 +2287,11 @@ def _run_daily_job_locked(team_id: str):
         # module state — a late-waking zombie must not clear it, and must not
         # clear a stop that was requested for someone else.
         if getattr(_thread_state, "gen", None) == _active_gen:
-            _current_run_id  = None
-            _current_team_id = None
-            _stats           = None
+            _current_run_id   = None
+            _current_team_id  = None
+            _current_run_date = None
+            _stats            = None
+            _progress         = None
             _stop_event.clear()
             _clear_log()
         else:
@@ -1959,13 +2303,53 @@ def _run_daily_job_locked(team_id: str):
 
 # ── Startup catch-up ───────────────────────────────────────────────────────
 
+def _resume_interrupted_run(today_str: str) -> "int | None":
+    """Continue today's run if the previous process died while it was going
+    (a stall restart, a deploy, a crash). Returns the resumed run id."""
+    try:
+        rows = _db.get_running_cron_runs()
+    except Exception as e:
+        logger.error(f"[TAiQ Cron] Startup: could not look for interrupted runs: {e}")
+        return None
+
+    for row in rows:   # newest first; only one run can be active at a time
+        team = row.get("team_id") or "cnk"
+        if row.get("run_date") != today_str or is_team_paused(team):
+            continue   # left for mark_stale_runs_failed
+        progress = _load_progress(row)
+        if progress["resumes"] >= _MAX_RESUMES:
+            logger.error(
+                f"[TAiQ Cron] Startup: run #{row['id']} ({team}) was interrupted again after "
+                f"{progress['resumes']} resume(s) — giving up on it."
+            )
+            _append_log_file(
+                row.get("log_file"),
+                f"⏱ Run interrupted again after {progress['resumes']} resume(s) — giving up on today's run.",
+            )
+            _db.update_cron_run(
+                row["id"], status="failed",
+                finished_at=now_ist_naive().isoformat(timespec="seconds"),
+                current_keyword="",
+                error_msg=f"Interrupted again after {progress['resumes']} resume(s) — gave up.",
+            )
+            continue
+        logger.info(f"[TAiQ Cron] Startup: resuming interrupted run #{row['id']} ({team})")
+        threading.Thread(
+            target=run_daily_job, args=(team,), kwargs={"resume_run_id": row["id"]},
+            daemon=True, name=f"taiq-resume-{team}",
+        ).start()
+        return row["id"]
+    return None
+
+
 def _check_and_fire_if_needed():
     import pytz
     IST       = pytz.timezone("Asia/Kolkata")
     now_ist   = datetime.now(IST)
     today_str = now_ist.strftime("%Y-%m-%d")
 
-    stale_count = _db.mark_stale_runs_failed()
+    resumed_id  = _resume_interrupted_run(today_str)
+    stale_count = _db.mark_stale_runs_failed(keep_id=resumed_id)
     if stale_count:
         logger.info(f"[TAiQ Cron] Startup: marked {stale_count} stale run(s) as failed")
 
@@ -1991,19 +2375,22 @@ def _check_and_fire_if_needed():
 # ── Scheduler init ─────────────────────────────────────────────────────────
 
 def init_scheduler(db):
-    global _scheduler, _db
+    global _scheduler, _db, _in_server
     from apscheduler.schedulers.background import BackgroundScheduler
     from apscheduler.triggers.cron import CronTrigger
     import pytz
 
     _db = db
+    _in_server = True
     IST = pytz.timezone("Asia/Kolkata")
 
     _scheduler = BackgroundScheduler(timezone=IST)
 
+    # Jobs call _scheduled_run, which hands the scrape to its own thread and
+    # returns at once — a wedged run can then never block the next day's job.
     # 1) CNK Daily Scrape at 07:00 AM IST
     _scheduler.add_job(
-        run_daily_job,
+        _scheduled_run,
         trigger=CronTrigger(hour=7, minute=0, timezone=IST),
         args=["cnk"],
         id="daily_taiq_job_cnk",
@@ -2015,7 +2402,7 @@ def init_scheduler(db):
     # 2) TMI Daily Scrape at 09:00 PM IST (21:00) — not scheduled while paused
     if not is_team_paused("tmi"):
         _scheduler.add_job(
-            run_daily_job,
+            _scheduled_run,
             trigger=CronTrigger(hour=21, minute=0, timezone=IST),
             args=["tmi"],
             id="daily_taiq_job_tmi",
@@ -2033,6 +2420,13 @@ def init_scheduler(db):
     threading.Thread(
         target=_check_and_fire_if_needed, daemon=True, name="taiq-startup-check"
     ).start()
+    threading.Thread(
+        target=_watchdog_loop, daemon=True, name="taiq-stall-watchdog"
+    ).start()
+    logger.info(
+        f"[TAiQ Cron] Stall watchdog on — {_STALL_SECONDS // 60} min without progress "
+        f"triggers recovery ({'container restart' if _self_restart_enabled() else 'in-process resume'})"
+    )
 
 
 def shutdown_scheduler():

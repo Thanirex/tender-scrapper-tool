@@ -10,6 +10,11 @@ services:
       - "8001:8001"
     env_file:
       - .env
+    environment:
+      # A TAiQ run with no progress for 30 min makes the app exit on purpose;
+      # `restart: unless-stopped` below brings it straight back and the run
+      # resumes from the next site (see cron_runner._reap_if_stalled).
+      - TAIQ_SELF_RESTART=1
     volumes:
       - taiq-data:/data
     restart: unless-stopped
